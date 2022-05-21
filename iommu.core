@@ -1,0 +1,28 @@
+CAPI=2:
+
+name : rivos:riscv:iommu:0
+
+filesets:
+  rtl:
+    files:
+      - src/rtl/iommu.v
+    file_type : verilogSource
+
+  openlane: {files : [data/sky130.tcl : {file_type : tclSource}]}
+
+targets:
+  default:
+    filesets: [rtl]
+
+  lint:
+    default_tool : verilator
+    filesets : [rtl]
+    tools:
+      verilator:
+        mode : lint-only
+    toplevel : iommu
+
+  sky130:
+    default_tool: openlane
+    filesets: [rtl, openlane]
+    toplevel: iommu
