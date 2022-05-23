@@ -30,55 +30,109 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-module rv_iommu_mmio(
-    input         clk,
-    input         rst_n,
-    input  [11:0] paddr,
-    input         pwrite,
-    input         psel,
-    input         penable,
-    input  [31:0] pwdata,
-    output [31:0] prdata
-);
-    `include "params.vh"
-    reg [1:0] spt_st;
-    reg [9:0] spt_st;
+module iommu 
+       #(
+        parameter MAX_PA  = 46,
+        parameter MAX_PAB = 45,
+        parameter MAX_PPNB = 33
+        )
+        (
+        input wire clk,
+        input wire rst_n,
+
+        // MMIO bus
+        input  wire [11:0] mmio_paddr,
+        input  wire        mmio_pwrite,
+        input  wire        mmio_psel,
+        input  wire        mmio_penable,
+        input  wire [63:0] mmio_pwdata,
+        output wire [63:0] mmio_prdata,
+
+        // Address Translation Request bus
+        input wire [51:0] pgwkr_iova,
+        input wire [23:0] pgwkr_device_id,
+        input wire [19:0] pgwkr_process_id,
+        input wire [1:0]  pgwkr_addr_type,
+        input wire        pgwkr_pid_valid,
+        input wire [7:0]  pgwkr_tag,
+        input wire        pgwkr_no_write,
+        input wire        pgwkr_exec_req,
+        input wire        pgwkr_priv_req,
+        input wire        pgwkr_irdy,
+        output wire       pgwkr_trdy,
+
+        // Address translation Completion bus
+        output wire [2:0]        pgwkc_status, 
+        output wire [MAX_PPNB:0] pgwkc_resp_pa, 
+        output wire [7:0]        pgwkc_tag, 
+        output wire              pgwkc_size,
+        output wire              pgwkc_no_snoop,
+        output wire              pgwkc_cxl_io,
+        output wire              pgwkc_global,
+        output wire              pgwkc_priv,
+        output wire              pgwkc_exe,
+        output wire              pgwkc_u,
+        output wire              pgwkc_r,
+        output wire              pgwkc_w,
+        output wire              pgwkc_irdy,
+        input  wire              pgwkc_trdy
+    );
+    `include "consts.vh"
+
+    wire ddtp_pgwk_idle, ddtp_pgwk_stall_req;
+
+    rv_iommu_mmio mmio(
+        .clk(clk),
+        .rst_n(rst_n),
+        .paddr(mmio_paddr),
+        .pwrite(mmio_pwrite),
+        .psel(mmio_psel),
+        .penable(mmio_penable),
+        .pwdata(mmio_pwdata),
+        .prdata(mmio_prdata),
+        .ddtp_pgwk_stall_req_o(ddtp_pgwk_stall_req),
+        .ddtp_pgwk_idle_i(ddtp_pgwk_idle)
+    );
+
+    rv_iommu_walker walker(
+        .clk(clk),
+        .rst_n(rst_n),
+
+        // translation request interface
+        .atr_iova(pgwkr_iova),
+        .atr_device_id(pgwkr_device_id),
+        .atr_process_id(pgwkr_process_id),
+        .atr_addr_type(pgwkr_addr_type),
+        .atr_pid_valid(pgwkr_pid_valid),
+        .atr_tag(pgwkr_tag),
+        .atr_no_write(pgwkr_no_write),
+        .atr_exec_req(pgwkr_exec_req),
+        .atr_priv_req(pgwkr_priv_req),
+        .atr_irdy(pgwkr_irdy),
+        .atr_trdy(pgwkr_trdy),
 
 
-    always @(negedge rst_n or posedge clk) begin
-        if ( rst_n == 0 ) begin
-                apt_st <= 0;
-                prdata <= 0;
-        end
-        else begin
-            case (apb_st)
-                SETUP : begin
-                    prdata <= 0;
-                    if ( psel && !penable) begin
-                        if ( pwrite ) begin
-                            apb_st <= W_ENABLE;
-                        end
-                        else begin
-                            apb_st <= R_ENABLE;
-                        end
-                    end
-                end
-                R_ENABLE : begin
-                    if ( psel && penable && !pwrite ) begin
-                        reg = paddr[11:2];
-                        case ( reg ) : begin
-                            CAPABILITIES : begin
-                                prdata = 
-                            end
-                            CAPABILITIES_H : begin
-                            end
-                            
-                        endcase
-                    end
-                end
-                W_ENABLE : begin
-                end
-            endcase
-        end
+        // translation response interface
+        .atc_status(pgwkc_status), 
+        .atc_resp_pa(pgwkc_resp_pa), 
+        .atc_tag(pgwkc_tag), 
+        .atc_size(pgwkc_size),
+        .atc_no_snoop(pgwkc_no_snoop),
+        .atc_cxl_io(pgwkc_cxl_io),
+        .atc_global(pgwkc_global),
+        .atc_priv(pgwkc_priv),
+        .atc_exe(pgwkc_exe),
+        .atc_u(pgwkc_u),
+        .atc_r(pgwkc_r),
+        .atc_w(pgwkc_w),
+        .atc_irdy(pgwkc_irdy),
+        .atc_trdy(pgwkc_trdy),
+
+        // Control signals - input
+        .ddtp_pgwk_stall_req_i(ddtp_pgwk_stall_req),
+
+        // Control signals - output
+        .ddtp_pgwk_idle_o(ddtp_pgwk_idle)
+    );
 
 endmodule

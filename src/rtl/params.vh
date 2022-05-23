@@ -1,5 +1,4 @@
-// iommu.vh
-// RISC-V IOMMU parameters
+// RISC-V IOMMU constants
 // Author - ved@rivosinc.com
 // Copyright (c) 2022, Rivos inc.
 // All rights reserved
@@ -30,7 +29,6 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-`ifndef _params_vh_
-`define _params_vh_
-parameter version = 0x01;
-`endif
+parameter MAX_PA  = 46,
+          MAX_PAB = 45,
+          MAX_PPNB = 33;
