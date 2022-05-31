@@ -32,6 +32,7 @@
 //`ifndef _PARAMS_VH_
 //`define _PARAMS_VH_
 
+localparam MAX_PA  = 46;
 // MMIO register address
 localparam CAPABILITIES_ADDR   = 0;
 localparam CAPABILITIES_H_ADDR = 4;
@@ -50,11 +51,11 @@ localparam MODE_EB  = 60;
 localparam BUSY_BIT = 59;
 localparam RSVD_SB  = 58;
 localparam RSVD_EB  = MAX_PA;
-localparam OFF         = 0;
-localparam BARE        = 1;
-localparam ONE_LEVEL   = 2;
-localparam TWO_LEVEL   = 3;
-localparam THREE_LEVEL = 4;
+localparam IOMMU_OFF = 0;
+localparam DDT_BARE = 1;
+localparam DDT_ONE_LEVEL   = 2;
+localparam DDT_TWO_LEVEL   = 3;
+localparam DDT_THREE_LEVEL = 4;
 
 // CAPABILITIES register params
 localparam IOMMU_VERSION = 1;
@@ -88,7 +89,50 @@ localparam IOMMU_CAPS_H  = (IOMMU_CAPS >> 32);
 
 localparam MAX_PW = 2;
 
-localparam WALK_SM_IDLE        = 0;
-localparam WALK_SM_DDTC_LOOKUP = 1;
+localparam PICK                     = 0;
+localparam WALK_SM_DDTC_PDTC_LOOKUP = 1;
+localparam WALK_SM_DDT_WALK         = 2;
+localparam WALK_SM_CACHE_DDTE       = 3;
+localparam WALK_SM_FAULT_REPORT     = 16;
+
+
+localparam DDT_CHECK_L0             = 0;
+localparam DDT_LOAD_L0              = 1;
+localparam DDT_CHECK_L1             = 2;
+localparam DDT_LOAD_L1              = 3;
+localparam DDT_CHECK_L2             = 4;
+localparam DDT_LOAD_L2              = 5;
+
+// Fault causes
+localparam ALL_IB_TRANS_DISALLOWED = 256;
+localparam DDT_LOAD_ACC_FAULT = 257;
+localparam DDT_ENTRY_NOT_VALID = 258;
+localparam DDT_ENTRY_MISCONFIGURED = 259;
+localparam TRANS_TYPE_DISALLOWED = 260;
+localparam DDT_DATA_CORRUPTION = 268;
+
+// Load bus opcodes
+localparam LOAD = 1;
+localparam STORE = 2;
+
+// DC
+localparam DC_RSVD_BIT_MAP        = 0; // FIXME
+localparam IOHGATP_BARE = 0;
+localparam IOHGATP_SV48X4 = 9;
+localparam SATP_BARE = 0;
+localparam SATP_SV48 = 9;
+localparam MSIPTP_BARE = 0;
+localparam MSIPTP_FLAT = 1;
+localparam PDTP_BARE = 0;
+localparam PDTP_PD20 = 1;
+localparam PDTP_PD17 = 2;
+localparam PDTP_PD8  = 3;
+
+
+// Address type
+localparam ADDR_TYPE_UNTRANSLATED = 0;
+localparam ADDR_TYPE_TRANSLATED   = 1;
+localparam ADDR_TYPE_TRANS_REQ    = 2;
+localparam ADDR_TYPE_RESERVED     = 3;
 
 //`endif //_PARAMS_VH_

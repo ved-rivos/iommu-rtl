@@ -30,28 +30,20 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-
+`include "iommu.svh"
 module rv_iommu_mmio
-       #(
-        parameter MAX_PA  = 46,
-        parameter MAX_PAB = 45,
-        parameter MAX_PPNB = 33
-        )
-        (
+    (
         input  wire        clk,
         input  wire        rst_n,
 
         // MMIO input-output bus
-        input  wire [11:0] paddr,
-        input  wire        pwrite,
-        input  wire        psel,
-        input  wire        penable,
+        input mmio_ctrl_t  mmio_ctl,
         input  wire [63:0] pwdata,
         output wire [63:0] prdata,
 
         // MMIO state 
-        output wire [3:0]        ddtp_iommu_mode_o,
-        output wire [MAX_PAB:0]  ddtp_ppn_o,
+        output wire [3:0]   ddtp_iommu_mode_o,
+        output wire [33:0]  ddtp_ppn_o,
 
         // Control signals - output
         output wire              ddtp_pgwk_stall_req_o,
@@ -70,11 +62,11 @@ module rv_iommu_mmio
 
     // DDTP - MMIO state
     reg [MODE_SB:MODE_EB] ddtp_iommu_mode;
-    reg [MAX_PAB:0]       ddtp_ppn;
+    reg [45:0]       ddtp_ppn;
     reg                   ddtp_busy;
     // DDTP - Shadow state for page walks
     reg [MODE_SB:MODE_EB] pgwk_ddtp_iommu_mode;
-    reg [MAX_PAB:0]       pgwk_ddtp_ppn;
+    reg [45:0]       pgwk_ddtp_ppn;
 
     // Wire connections
     assign prdata = read_data;
@@ -93,9 +85,9 @@ module rv_iommu_mmio
             case (apb_st)
                 SETUP : begin
                     read_data <= 0;
-                    if ( psel && !penable) begin
-                        reg_ofst <= paddr[11:2];
-                        if ( pwrite ) begin
+                    if ( mmio_ctl.psel && !mmio_ctl.penable) begin
+                        reg_ofst <= mmio_ctl.paddr[11:2];
+                        if ( mmio_ctl.pwrite ) begin
                             apb_st <= W_ENABLE;
                         end
                         else begin
@@ -104,7 +96,7 @@ module rv_iommu_mmio
                     end
                 end
                 R_ENABLE : begin
-                    if ( psel && penable && !pwrite ) begin
+                    if ( mmio_ctl.psel && mmio_ctl.penable && !mmio_ctl.pwrite ) begin
                         case ( reg_ofst )
                             CAPABILITIES : begin
                                 read_data <= IOMMU_CAPS;
@@ -118,7 +110,7 @@ module rv_iommu_mmio
                                 read_data <= 0;
                             end
                             DDTP : begin
-                                read_data[MAX_PAB:0] <= ddtp_ppn;
+                                read_data[45:0] <= ddtp_ppn;
                                 read_data[MODE_SB:MODE_EB] <= ddtp_iommu_mode;
                                 read_data[BUSY_BIT] <= ddtp_busy;
                                 read_data[RSVD_SB:RSVD_EB] <= 0;
@@ -128,14 +120,14 @@ module rv_iommu_mmio
                     apb_st <= SETUP;
                 end
                 W_ENABLE : begin
-                    if ( psel && penable && pwrite ) begin
+                    if ( mmio_ctl.psel && mmio_ctl.penable && mmio_ctl.pwrite ) begin
                         case ( reg_ofst )
                             DDTP : begin
-                                if ( (pwdata[MODE_SB:MODE_EB] <= THREE_LEVEL) && (ddtp_busy == 0)) begin
+                                if ( (pwdata[MODE_SB:MODE_EB] <= DDT_THREE_LEVEL) && (ddtp_busy == 0)) begin
                                     // Set ddtp to busy to trigger a page walk
                                     // stall, IOATC flush, and fencing outstanding requests
                                     ddtp_busy <= 1;
-                                    ddtp_ppn <= pwdata[MAX_PAB:0];
+                                    ddtp_ppn <= pwdata[45:0];
                                     ddtp_iommu_mode <= pwdata[MODE_SB:MODE_EB];
                                 end
                             end

@@ -36,13 +36,13 @@
 #
 #===================================================================
 
-CORE_SRC=../src/rtl/iommu_mmio.v ../src/rtl/iommu_walker.v
+CORE_SRC=src/rtl/iommu_mmio.sv src/rtl/iommu_walker.sv src/rtl/iommu_ddtc.sv src/rtl/iommu_pdtc.sv src/rtl/iommu_lspa.sv
 
-TOP_SRC=../src/rtl/iommu.v $(CORE_SRC)
-TB_TOP_SRC=../src/tb/tb_iommu.v
+TOP_SRC=src/rtl/iommu.sv $(CORE_SRC)
+TB_TOP_SRC=src/tb/tb_iommu.sv
 
-CC = iverilog -I ../src/rtl/
-CC_FLAGS = -Wall
+CC = iverilog -g2012 -gstrict-expr-width -I src/rtl/
+CC_FLAGS = -Wall  
 
 LINT = verilator
 LINT_FLAGS = +1364-2001ext+ --lint-only  -Wall -Wno-fatal -Wno-DECLFILENAME
@@ -74,6 +74,7 @@ lint:  $(TOP_SRC)
 clean:
 	rm -f top.sim
 	rm -f core.sim
+	rm -f *.vcd
 
 
 help:
