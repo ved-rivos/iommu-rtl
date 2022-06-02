@@ -86,7 +86,7 @@ module rv_iommu_ddtc
         output wire        ddtc_flush_done_o
     );
     reg ddtc_hit, ddtc_lkup_fill_done, ddtc_flush_done;
-    integer i, hit_row, j;
+    integer i, hit_row, j, l;
 
     reg [23:0] device_id_tag[4];
     reg        dcc_en_ats[4];
@@ -134,10 +134,33 @@ module rv_iommu_ddtc
 
     assign ddtc_flush_done_o = ddtc_flush_done;
 
+    always @(negedge rst_n or negedge ddtc_lookup_i or negedge ddtc_flush_i) begin
+        if ( rst_n == 0 ) begin
+            invalid_found <= 0;
+            lru_entry <= 0;
+            lru_val <= 3;
+        end
+        else begin
+            // Find victim - invalid or LRU
+            for ( l = 0; l < 4; l++ ) begin
+                if ( valid[l] == 0 ) begin
+                    invalid_found = 1;
+                    invalid_entry = l;
+                end
+                if ( lru[l] <= lru_val ) begin
+                    lru_val = lru[l];
+                    lru_entry = l;
+                end
+            end
+            victim = (invalid_found == 1) ? invalid_entry : lru_entry;
+        end
+    end
+
     always @(negedge rst_n or posedge clk) begin
         if ( rst_n == 0 ) begin
             for ( i = 0; i < 4; i++) begin
                 valid[i] <= 0;
+                lru[i] <= 3 - i;
             end
             ddtc_lkup_fill_done <= 0;
             ddtc_hit <= 0;
@@ -159,20 +182,20 @@ module rv_iommu_ddtc
             end
             // Fill logic - invoked if no lookup or flush being done
             if ( ddtc_fill_i && !ddtc_lookup_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
-                invalid_found = 0;
-                lru_entry = 0;
-                lru_val = 3;
+                //invalid_found = 0;
+                //lru_entry = 0;
+                //lru_val = 3;
                 // Find victim - invalid or LRU
-                for ( i = 0; i < 4; i++ ) begin
-                    if ( valid[i] == 0 ) begin
-                        invalid_found = 1;
-                        invalid_entry = i;
-                    end
-                    if ( lru[i] <= lru_val ) begin
-                        lru_val = lru[i];
-                        lru_entry = i;
-                    end
-                end
+                //for ( i = 0; i < 4; i++ ) begin
+                //    if ( valid[i] == 0 ) begin
+                //        invalid_found = 1;
+                //        invalid_entry = i;
+                //    end
+                //    if ( lru[i] <= lru_val ) begin
+                //        lru_val = lru[i];
+                //        lru_entry = i;
+                //    end
+                //end
                 victim = (invalid_found == 1) ? invalid_entry : lru_entry;
                 device_id_tag[victim] <= device_id_i;
                 dcc_en_ats[victim] <= en_ats_i;
@@ -192,6 +215,7 @@ module rv_iommu_ddtc
                 dcc_msi_addr_mask[victim] <= msi_addr_mask_i;
                 dcc_msi_addr_pat[victim] <= msi_addr_pat_i;
                 ddtc_lkup_fill_done <= 1;
+                valid[victim] <= 1;
             end
             // Lookup logic - invoked if no fill or flush being done
             if ( ddtc_lookup_i && !ddtc_fill_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
