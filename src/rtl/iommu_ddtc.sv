@@ -30,7 +30,6 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-`include "iommu.svh"
 module rv_iommu_ddtc
         (
         input wire      clk,
@@ -85,10 +84,11 @@ module rv_iommu_ddtc
         input  wire        flush_device_id_valid_i,
         output wire        ddtc_flush_done_o
     );
-    reg ddtc_hit, ddtc_lkup_fill_done, ddtc_flush_done;
-    integer i, hit_row, j, l;
+    reg ddtc_lkup_fill_done, ddtc_flush_done;
+    reg ddtc_hit[4];
+    reg [1:0] hit_row;
+    reg [2:0] i;
 
-    reg [23:0] device_id_tag[4];
     reg        dcc_en_ats[4];
     reg        dcc_en_pri[4];
     reg        dcc_t2gpa[4];
@@ -105,16 +105,15 @@ module rv_iommu_ddtc
     reg [43:0] dcc_msiptp_ppn[4];
     reg [51:0] dcc_msi_addr_mask[4];
     reg [51:0] dcc_msi_addr_pat[4];
+    reg [23:0] device_id_tag[4];
     reg        valid[4];
-    reg [1:0]  lru[4];
+    reg [2:0]  lru;
+    reg [2:0]  victim;
 
-    reg        invalid_found;
-    reg [1:0]  invalid_entry;
-    reg [1:0]  lru_entry, lru_val;
-    reg [1:0]  victim;
+    assign ddtc_flush_done_o = ddtc_flush_i & !ddtc_lookup_i & !ddtc_fill_i;
+    assign ddtc_lkup_fill_done_o = !ddtc_flush_i & (ddtc_lookup_i | !ddtc_fill_i);
+    assign ddtc_hit_o = ddtc_hit[0] | ddtc_hit[1] | ddtc_hit[2] | ddtc_hit[3];
 
-    assign ddtc_lkup_fill_done_o = ddtc_lkup_fill_done;
-    assign ddtc_hit_o = ddtc_hit;
     assign en_ats_o = dcc_en_ats[hit_row];
     assign en_pri_o = dcc_en_pri[hit_row];
     assign t2gpa_o = dcc_t2gpa[hit_row];
@@ -132,112 +131,147 @@ module rv_iommu_ddtc
     assign msi_addr_mask_o = dcc_msi_addr_mask[hit_row];
     assign msi_addr_pat_o = dcc_msi_addr_pat[hit_row];
 
-    assign ddtc_flush_done_o = ddtc_flush_done;
-
-    always @(negedge rst_n or negedge ddtc_lookup_i or negedge ddtc_flush_i) begin
+    // pick invalid as victim or the lru if all valid
+    //always_comb begin
+    always @(negedge rst_n or negedge ddtc_fill_i) begin
         if ( rst_n == 0 ) begin
-            invalid_found <= 0;
-            lru_entry <= 0;
-            lru_val <= 3;
-        end
-        else begin
-            // Find victim - invalid or LRU
-            for ( l = 0; l < 4; l++ ) begin
-                if ( valid[l] == 0 ) begin
-                    invalid_found = 1;
-                    invalid_entry = l;
-                end
-                if ( lru[l] <= lru_val ) begin
-                    lru_val = lru[l];
-                    lru_entry = l;
-                end
-            end
-            victim = (invalid_found == 1) ? invalid_entry : lru_entry;
-        end
-    end
-
-    always @(negedge rst_n or posedge clk) begin
-        if ( rst_n == 0 ) begin
-            for ( i = 0; i < 4; i++) begin
-                valid[i] <= 0;
-                lru[i] <= 3 - i;
-            end
+            valid[0] = 0;
+            valid[1] = 0;
+            valid[2] = 0;
+            valid[3] = 0;
+            lru = 3'b000;
             ddtc_lkup_fill_done <= 0;
-            ddtc_hit <= 0;
+            ddtc_hit[0] = 0;
+            ddtc_hit[1] = 0;
+            ddtc_hit[2] = 0;
+            ddtc_hit[3] = 0;
             ddtc_flush_done <= 0;
         end
-        else begin
-            // Flush logic
-            if ( ddtc_flush_i && ddtc_flush_done == 0 ) begin
-                for ( i = 0; i < 4; i++) begin
-                    if ( (flush_device_id_valid_i == 0) || 
-                         (device_id_tag[i] == flush_device_id_i) ) begin
-                        valid[i] <= 0;
-                    end
+        if ( valid[0] & valid[1] & valid[2] & valid[3] ) begin
+                casez (lru)
+                    3'b00?: victim = 0;
+                    3'b10?: victim = 1;
+                    3'b?10: victim = 2;
+                    3'b?11: victim = 3;
+                endcase
+        end else begin
+            victim = valid[0] == 0 ? 0 :
+                     valid[1] == 0 ? 1 :
+                     valid[2] == 0 ? 2 : 3;
+        end
+    end
+    genvar k;
+    generate
+        for ( k = 0; k < 4; k++) begin
+            always_comb begin
+                if ( k == victim && !ddtc_flush_i && !ddtc_lookup_i && ddtc_fill_i ) begin
+                    device_id_tag[k] = device_id_i;
+                    dcc_en_ats[k] = en_ats_i;
+                    dcc_en_pri[k] = en_pri_i;
+                    dcc_t2gpa[k] = t2gpa_i;
+                    dcc_dtf[k] = dtf_i;
+                    dcc_pdtv[k] = pdtv_i;
+                    dcc_prpr[k] = prpr_i;
+                    dcc_iohgatp_mode[k] = iohgatp_mode_i;
+                    dcc_gscid[k] = gscid_i;
+                    dcc_iohgatp_ppn[k] = iohgatp_ppn_i;
+                    dcc_fsc_mode[k] = fsc_mode_i;
+                    dcc_fsc_ppn[k] = fsc_ppn_i;
+                    dcc_dc_pscid[k] = dc_pscid_i;
+                    dcc_msiptp_mode[k] = msiptp_mode_i;
+                    dcc_msiptp_ppn[k] = msiptp_ppn_i;
+                    dcc_msi_addr_mask[k] = msi_addr_mask_i;
+                    dcc_msi_addr_pat[k] = msi_addr_pat_i;
+                    valid[k] = 1;
                 end
-                ddtc_flush_done <= 1;
             end
-            if ( ddtc_flush_i == 0 && ddtc_flush_done == 1) begin
-                ddtc_flush_done <= 0;
-            end
-            // Fill logic - invoked if no lookup or flush being done
-            if ( ddtc_fill_i && !ddtc_lookup_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
-                //invalid_found = 0;
-                //lru_entry = 0;
-                //lru_val = 3;
-                // Find victim - invalid or LRU
-                //for ( i = 0; i < 4; i++ ) begin
-                //    if ( valid[i] == 0 ) begin
-                //        invalid_found = 1;
-                //        invalid_entry = i;
-                //    end
-                //    if ( lru[i] <= lru_val ) begin
-                //        lru_val = lru[i];
-                //        lru_entry = i;
-                //    end
-                //end
-                victim = (invalid_found == 1) ? invalid_entry : lru_entry;
-                device_id_tag[victim] <= device_id_i;
-                dcc_en_ats[victim] <= en_ats_i;
-                dcc_en_pri[victim] <= en_pri_i;
-                dcc_t2gpa[victim] <= t2gpa_i;
-                dcc_dtf[victim] <= dtf_i;
-                dcc_pdtv[victim] <= pdtv_i;
-                dcc_prpr[victim] <= prpr_i;
-                dcc_iohgatp_mode[victim] <= iohgatp_mode_i;
-                dcc_gscid[victim] <= gscid_i;
-                dcc_iohgatp_ppn[victim] <= iohgatp_ppn_i;
-                dcc_fsc_mode[victim] <= fsc_mode_i;
-                dcc_fsc_ppn[victim] <= fsc_ppn_i;
-                dcc_dc_pscid[victim] <= dc_pscid_i;
-                dcc_msiptp_mode[victim] <= msiptp_mode_i;
-                dcc_msiptp_ppn[victim] <= msiptp_ppn_i;
-                dcc_msi_addr_mask[victim] <= msi_addr_mask_i;
-                dcc_msi_addr_pat[victim] <= msi_addr_pat_i;
-                ddtc_lkup_fill_done <= 1;
-                valid[victim] <= 1;
-            end
-            // Lookup logic - invoked if no fill or flush being done
-            if ( ddtc_lookup_i && !ddtc_fill_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
-                for ( i = 0; i < 4; i++) begin
-                    if ( (device_id_tag[i] == device_id_i) && valid[i] ) begin
-                        hit_row <= i;
-                        ddtc_hit <= 1;
-                        // age older entries and make entry MRU
-                        for ( j = 0; j < 4; j++ ) begin
-                            if ( lru[j] > lru[i] ) begin
-                                lru[j] <= lru[j] - 1;
-                            end
-                        end
-                        lru[i] <= 3;
-                    end
-                end
-                ddtc_lkup_fill_done <= 1;
-            end
-            if ( ddtc_lkup_fill_done == 1 && ddtc_lookup_i == 0 && ddtc_fill_i == 0) begin
-                ddtc_lkup_fill_done <= 0;
-                ddtc_hit <= 0;
+        end
+    endgenerate
+
+    generate
+    for ( k = 0; k < 4; k++) begin
+        always_comb begin
+            if ( (device_id_tag[k] == device_id_i) && valid[k] && !ddtc_flush_i && ddtc_lookup_i && !ddtc_fill_i ) begin
+                ddtc_hit[k] = 1;
+                hit_row = k;
+                case (k)
+                    0: lru = (lru & 3'b001) | 3'b110;
+                    1: lru = (lru & 3'b001) | 3'b010;
+                    2: lru = (lru & 3'b100) | 3'b001;
+                    3: lru = (lru & 3'b100) | 3'b000;
+                endcase
             end
         end
     end
+    endgenerate
+
+    generate
+    for ( k = 0; k < 4; k++) begin
+        always_comb begin
+            if ( (((flush_device_id_valid_i == 1) && (device_id_tag[k] == flush_device_id_i)) |
+                  (flush_device_id_valid_i == 0)) && ddtc_flush_i && !ddtc_lookup_i && !ddtc_fill_i ) begin
+                valid[k] = 0;
+            end
+        end
+    end
+    endgenerate
+
+
+//    always @(negedge rst_n or posedge ddtc_flush_i or posedge ddtc_lookup_i or posedge ddtc_fill_i or 
+//                              negedge ddtc_flush_i or negedge ddtc_lookup_i or negedge ddtc_fill_i ) begin
+//        if ( rst_n == 0 ) begin
+//            valid <= 4'b0000;
+//            lru = 3'b000;
+//            ddtc_lkup_fill_done <= 0;
+//            ddtc_hit <= 0;
+//            ddtc_flush_done <= 0;
+//        end
+//        else begin
+//            // Flush logic
+//            if ( ddtc_flush_i && !ddtc_fill_i && !ddtc_lookup_i && ddtc_flush_done == 0 ) begin
+//                do_flush <= 1;
+//                ddtc_flush_done <= 1;
+//            end
+//            if ( ddtc_flush_i == 0 && ddtc_flush_done == 1) begin
+//                ddtc_flush_done <= 0;
+//            end
+//            // Fill logic - invoked if no lookup or flush being done
+//            if ( ddtc_fill_i && !ddtc_lookup_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
+//                //victim <= make_victim();
+//                device_id_tag[victim] <= device_id_i;
+//                dcc_en_ats[victim] <= en_ats_i;
+//                dcc_en_pri[victim] <= en_pri_i;
+//                dcc_t2gpa[victim] <= t2gpa_i;
+//                dcc_dtf[victim] <= dtf_i;
+//                dcc_pdtv[victim] <= pdtv_i;
+//                dcc_prpr[victim] <= prpr_i;
+//                dcc_iohgatp_mode[victim] <= iohgatp_mode_i;
+//                dcc_gscid[victim] <= gscid_i;
+//                dcc_iohgatp_ppn[victim] <= iohgatp_ppn_i;
+//                dcc_fsc_mode[victim] <= fsc_mode_i;
+//                dcc_fsc_ppn[victim] <= fsc_ppn_i;
+//                dcc_dc_pscid[victim] <= dc_pscid_i;
+//                dcc_msiptp_mode[victim] <= msiptp_mode_i;
+//                dcc_msiptp_ppn[victim] <= msiptp_ppn_i;
+//                dcc_msi_addr_mask[victim] <= msi_addr_mask_i;
+//                dcc_msi_addr_pat[victim] <= msi_addr_pat_i;
+//                valid[victim] <= 1;
+//                ddtc_lkup_fill_done <= 1;
+//            end
+//            // Lookup logic - invoked if no fill or flush being done
+//            if ( ddtc_lookup_i && !ddtc_fill_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
+//                for ( i = 0; i < 4; i++) begin
+//                    if ( (device_id_tag[i[1:0]] == device_id_i) && valid[i[1:0]] ) begin
+//                        hit_row <= i[1:0];
+//                        ddtc_hit <= 1;
+//                    end
+//                end
+//                ddtc_lkup_fill_done <= 1;
+//            end
+//            if ( ddtc_lkup_fill_done == 1 && ddtc_lookup_i == 0 && ddtc_fill_i == 0) begin
+//                ddtc_lkup_fill_done <= 0;
+//                ddtc_hit <= 0;
+//            end
+//        end
+//    end
 endmodule

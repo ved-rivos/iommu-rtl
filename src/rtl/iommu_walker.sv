@@ -30,22 +30,42 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-`include "iommu.svh"
 module rv_iommu_walker
         (
         input wire      clk,
         input wire      rst_n,
 
         // translation request interface
-        input wire pw_req_t  atr_pwreq,
-        input wire      atr_irdy,
-        output wire     atr_trdy,
+        input wire        atr_irdy_i,
+        input wire [51:0] atr_iova_i,
+        input wire [23:0] atr_device_id_i,
+        input wire [19:0] atr_process_id_i,
+        input wire [1:0]  atr_addr_type_i,
+        input wire        atr_read_write_i,
+        input wire        atr_pid_valid_i,
+        input wire        atr_no_write_i,
+        input wire        atr_exec_req_i,
+        input wire        atr_priv_req_i,
+        input wire        atr_tee_req_i,
+        input wire [7:0]  atr_tag_i,
+        output wire       atr_trdy_o,
 
 
         // translation response interface
-        output wire pw_rsp_t atc_pwrsp,
-        output wire     atc_irdy,
-        input  wire     atc_trdy,
+        output wire        atc_irdy_o,
+        output wire [2:0]  atc_status_o,
+        output wire [33:0] atc_resp_pa_o,
+        output wire [7:0]  atc_tag_o,
+        output wire        atc_size_o,
+        output wire        atc_no_snoop_o,
+        output wire        atc_cxl_io_o,
+        output wire        atc_g_o,
+        output wire        atc_priv_o,
+        output wire        atc_exe_o,
+        output wire        atc_u_o,
+        output wire        atc_r_o,
+        output wire        atc_w_o,
+        input  wire        atc_trdy_i,
 
         input  wire [3:0]  ddtp_iommu_mode_i,
         input  wire [33:0] ddtp_ppn_i,
@@ -104,15 +124,23 @@ module rv_iommu_walker
 
         // PDTC lookup result
         input  wire        pdtc_hit_i,
-        input  wire pc_t   pc_i,
+        input  wire ens_i,
+        input  wire sum_i,
+        input  wire [19:0] pc_pscid_i,
+        input  wire [3:0]  pc_fsc_mode_i,
+        input  wire [33:0] pc_fsc_ppn_i,
 
         // PDTC fill data
-        output wire pc_t   pc_o,
+        output  wire ens_o,
+        output  wire sum_o,
+        output  wire [19:0] pc_pscid_o,
+        output  wire [3:0]  pc_fsc_mode_o,
+        output  wire [33:0] pc_fsc_ppn_o,
 
         // Load/store unit port
         output wire [45:0]       ls_addr_o,
         output wire [1:0]        ls_op_o,
-        output wire [MAX_PW-1:0] ls_tag_o,
+        output wire [$clog2(MAX_PW)-1:0] ls_tag_o,
         output wire [6:0]        ls_size_o,
         output wire              ls_req_irdy_o,
         input  wire              ls_req_trdy_i,
@@ -121,72 +149,116 @@ module rv_iommu_walker
         input  wire [511:0]      ld_data_i,
         input  wire              ld_acc_fault_i,
         input  wire              ld_poison_i,
-        input  wire [MAX_PW-1:0] ld_tag_i,
+        output wire [$clog2(MAX_PW)-1:0] ld_tag_i,
         input  wire              ld_data_irdy_i,
         output wire              ld_data_trdy_o
     );
     `include "consts.vh"
 
     // Page walk tracker
-    reg [MAX_PW-1 : 0] pwt_free_bitmap;
-    reg [MAX_PW-1 : 0] pwt_done_bitmap;
-    reg [MAX_PW-1 : 0] pwt_ready_bitmap;
-    reg                pw_req_t pwt_req[0 : MAX_PW-1];
-    reg                pw_rsp_t pwt_rsp[0 : MAX_PW-1];
-    reg [4:0]          pwt_next_state[0: MAX_PW-1];
-    reg [4:0]          pwt_sub_state[0: MAX_PW-1];
-    reg                pwt_pcvalid[0: MAX_PW-1];
-    reg                pc_t pwt_pc[0: MAX_PW-1];
-    reg [11:0]         pwt_cause[0: MAX_PW-1];
-    reg [63:0]         pwt_iotval2[0: MAX_PW-1];
-    reg [511:0]        pwt_ld_data[0: MAX_PW-1];
-    reg                pwt_acc_fault[0: MAX_PW-1];
-    reg                pwt_poison[0: MAX_PW-1];
-    reg                pwt_en_ats[0:MAX_PW-1];
-    reg                pwt_en_pri[0:MAX_PW-1];
-    reg                pwt_t2gpa[0:MAX_PW-1];
-    reg                pwt_dtf[0:MAX_PW-1];
-    reg                pwt_pdtv[0:MAX_PW-1];
-    reg                pwt_prpr[0:MAX_PW-1];
-    reg [3:0]          pwt_iohgatp_mode[0:MAX_PW-1];
-    reg [15:0]         pwt_gscid[0:MAX_PW-1];
-    reg [33:0]         pwt_iohgatp_ppn[0:MAX_PW-1];
-    reg [3:0]          pwt_fsc_mode[0:MAX_PW-1];
-    reg [33:0]         pwt_fsc_ppn[0:MAX_PW-1];
-    reg [19:0]         pwt_dc_pscid[0:MAX_PW-1];
-    reg [3:0]          pwt_msiptp_mode[0:MAX_PW-1];
-    reg [43:0]         pwt_msiptp_ppn[0:MAX_PW-1];
-    reg [51:0]         pwt_msi_addr_mask[0:MAX_PW-1];
-    reg [51:0]         pwt_msi_addr_pat[0:MAX_PW-1];
 
-    //pw_trk_t [MAX_PW-1 : 0] pwt;
-    integer            pgwk_in_flight;
+    // Input request in page walk tracker
+    reg [51:0]  pwt_iova[MAX_PW];
+    reg [23:0]  pwt_device_id[MAX_PW];
+    reg [19:0]  pwt_process_id[MAX_PW];
+    reg [1:0]   pwt_addr_type[MAX_PW];
+    reg         pwt_read_write[MAX_PW];
+    reg         pwt_pid_valid[MAX_PW];
+    reg         pwt_no_write[MAX_PW];
+    reg         pwt_exec_req[MAX_PW];
+    reg         pwt_priv_req[MAX_PW];
+    reg         pwt_tee_req[MAX_PW];
+    reg [7:0]   pwt_req_tag[MAX_PW];
 
-    wire               is_any_tracker_free;
-    assign             is_any_tracker_free = |pwt_free_bitmap;
-    wire               is_any_tracker_done;
-    assign             is_any_tracker_done = |pwt_done_bitmap;
-    wire               is_any_tracker_ready;
-    assign             is_any_tracker_ready = |pwt_ready_bitmap;
+    // Output response from page walk tracker
+    reg [2:0]   pwt_status[MAX_PW];
+    reg [33:0]  pwt_resp_pa[MAX_PW];
+    reg [7:0]   pwt_rsp_tag[MAX_PW];
+    reg         pwt_size[MAX_PW];
+    reg         pwt_no_snoop[MAX_PW];
+    reg         pwt_cxl_io[MAX_PW];
+    reg         pwt_g[MAX_PW];
+    reg         pwt_priv[MAX_PW];
+    reg         pwt_exe[MAX_PW];
+    reg         pwt_u[MAX_PW];
+    reg         pwt_r[MAX_PW];
+    reg         pwt_w[MAX_PW];
+
+    // Page walk tracker state
+    reg [4:0]   pw_state;
+    reg [4:0]   pwt_next_state[MAX_PW];
+    reg [4:0]   pwt_sub_state[MAX_PW];
+    reg         pwt_pcvalid[MAX_PW];
+    reg         pwt_pc_ens[MAX_PW];
+    reg         pwt_pc_sum[MAX_PW];
+    reg [19:0]  pwt_pc_pscid[MAX_PW];
+    reg [3:0]   pwt_pc_fsc_mode[MAX_PW];
+    reg [33:0]  pwt_pc_fsc_ppn[MAX_PW];
+    reg [11:0]  pwt_cause[MAX_PW];
+    reg [63:0]  pwt_iotval2[MAX_PW];
+    reg [511:0] pwt_ld_data[MAX_PW];
+    reg         pwt_acc_fault[MAX_PW];
+    reg         pwt_poison[MAX_PW];
+    reg         pwt_en_ats[MAX_PW];
+    reg         pwt_en_pri[MAX_PW];
+    reg         pwt_t2gpa[MAX_PW];
+    reg         pwt_dtf[MAX_PW];
+    reg         pwt_pdtv[MAX_PW];
+    reg         pwt_prpr[MAX_PW];
+    reg [3:0]   pwt_iohgatp_mode[MAX_PW];
+    reg [15:0]  pwt_gscid[MAX_PW];
+    reg [33:0]  pwt_iohgatp_ppn[MAX_PW];
+    reg [3:0]   pwt_fsc_mode[MAX_PW];
+    reg [33:0]  pwt_fsc_ppn[MAX_PW];
+    reg [19:0]  pwt_dc_pscid[MAX_PW];
+    reg [3:0]   pwt_msiptp_mode[MAX_PW];
+    reg [43:0]  pwt_msiptp_ppn[MAX_PW];
+    reg [51:0]  pwt_msi_addr_mask[MAX_PW];
+    reg [51:0]  pwt_msi_addr_pat[MAX_PW];
+
+
+    // page walk tracker allocator controls
+    reg [MAX_PW-1 : 0]     pwt_free_bitmap;
+    reg [MAX_PW-1 : 0]     pwt_ready_bitmap;
+    reg [MAX_PW-1 : 0]     pwt_done_bitmap;
+    reg [$clog2(MAX_PW)-1:0] next_free;
+    reg [$clog2(MAX_PW)-1:0] next_ready;
+    reg [$clog2(MAX_PW)-1:0] next_done;
+    reg [$clog2(MAX_PW)-1:0] pgwk_in_flight;
+    wire                   is_any_tracker_free;
+    wire                   is_any_tracker_ready;
+    wire                   is_any_tracker_done;
+    assign                 is_any_tracker_free = |pwt_free_bitmap;
+    assign                 is_any_tracker_done = |pwt_done_bitmap;
+    assign                 is_any_tracker_ready = |pwt_ready_bitmap;
+    assign                 ddtp_pgwk_idle_o = (pgwk_in_flight == 0) ? 1 : 0;
 
     localparam IDLE = 0;
     localparam REQ_READY = 1;
     localparam RSP_READY = 2;
-    reg               req_rsp_st;
-    reg   [4:0]       pw_state;
-    reg               next_free;
-    reg               next_done;
-    reg               next_ready;
+
+    // Request/response bus controls
+    reg [1:0] req_rsp_st;
+    assign    atr_trdy_o = (req_rsp_st == REQ_READY) ? 1 : 0;
+    assign    atc_irdy_o = (req_rsp_st == RSP_READY) ? 1 : 0;
+    assign    atc_status_o = pwt_status[next_ready];
+    assign    atc_resp_pa_o = pwt_resp_pa[next_ready];
+    assign    atc_tag_o = pwt_rsp_tag[next_ready];
+    assign    atc_size_o = pwt_size[next_ready];
+    assign    atc_no_snoop_o = pwt_no_snoop[next_ready];
+    assign    atc_cxl_io_o = pwt_cxl_io[next_ready];
+    assign    atc_g_o = pwt_g[next_ready];
+    assign    atc_priv_o = pwt_priv[next_ready];
+    assign    atc_exe_o = pwt_exe[next_ready];
+    assign    atc_u_o = pwt_u[next_ready];
+    assign    atc_r_o = pwt_r[next_ready];
+    assign    atc_w_o = pwt_w[next_ready];
+
     reg               ddtc_fill;
     reg               pdtc_fill;
-    assign atr_trdy = (req_rsp_st == REQ_READY) ? 1 : 0;
-    assign atc_irdy = (req_rsp_st == RSP_READY) ? 1 : 0;
-    assign ddtp_pgwk_idle_o = (pgwk_in_flight == 0) ? 1 : 0;
-    assign atc_pwrsp = pwt_rsp[next_done];
 
-
-    assign device_id_o = pwt_req[next_ready].device_id;
-    assign process_id_o = pwt_req[next_ready].process_id;
+    assign device_id_o = pwt_device_id[next_ready];
+    assign process_id_o = pwt_process_id[next_ready];
     assign ddtc_lookup_o = (pw_state == WALK_SM_DDTC_PDTC_LOOKUP ) ? 1 : 0;
     assign ddtc_fill_o = ddtc_fill;
     assign en_ats_o = pwt_en_ats[next_ready];
@@ -206,7 +278,7 @@ module rv_iommu_walker
     assign msi_addr_mask_o = pwt_msi_addr_mask[next_ready];
     assign msi_addr_pat_o = pwt_msi_addr_pat[next_ready];
 
-    assign            pdtc_lookup_o = (ddtc_lookup_o && pwt_req[next_ready].pid_valid);
+    assign            pdtc_lookup_o = (ddtc_lookup_o && pwt_pid_valid[next_ready]);
     assign            pdtc_fill_o = pdtc_fill;
 
     reg [45:0]        ls_addr;
@@ -235,14 +307,14 @@ module rv_iommu_walker
                 pwt_done_bitmap[i] <= 0;
                 pwt_ready_bitmap[i] <= 0;
             end
-            req_rsp_st = IDLE;
-            pgwk_in_flight = 0;
-            next_free = 0;
-            next_done = 0;
-            ddtc_fill = 0;
-            pdtc_fill = 0;
-            ld_data_trdy = 0;
-            ls_req_irdy = 0;
+            req_rsp_st <= IDLE;
+            pgwk_in_flight <= 0;
+            next_free <= 0;
+            next_done <= 0;
+            ddtc_fill <= 0;
+            pdtc_fill <= 0;
+            ld_data_trdy <= 0;
+            ls_req_irdy <= 0;
         end
         else begin
             case (req_rsp_st)
@@ -250,11 +322,11 @@ module rv_iommu_walker
                     if ( is_any_tracker_done ) begin
                         while ( pwt_done_bitmap[next_done] == 0 ) begin
                             next_done <= next_done + 1;
-                            next_done <= next_done & (MAX_PW - 1);
+                            next_done <= next_done & ($clog2(MAX_PW)-1);
                         end
                         req_rsp_st <= RSP_READY;
                     end else 
-                    if ( atr_irdy && is_any_tracker_free && ddtp_pgwk_stall_req_i == 0 ) begin
+                    if ( atr_irdy_i && is_any_tracker_free && ddtp_pgwk_stall_req_i == 0 ) begin
                         while ( pwt_free_bitmap[next_free] == 0 ) begin
                             next_free <= next_free + 1;
                             next_free <= next_free & (MAX_PW - 1);
@@ -265,20 +337,29 @@ module rv_iommu_walker
                 REQ_READY: begin
                     // Initialize the page walk tracker
                     pwt_free_bitmap[next_free] <= 0;
-                    pwt_req[next_free] <= atr_pwreq;
+                    pwt_iova[next_free] <= atr_iova_i;
+                    pwt_device_id[next_free] <= atr_device_id_i;
+                    pwt_process_id[next_free] <= atr_process_id_i;
+                    pwt_addr_type[next_free] <= atr_addr_type_i;
+                    pwt_read_write[next_free] <= atr_read_write_i;
+                    pwt_pid_valid[next_free] <= atr_pid_valid_i;
+                    pwt_no_write[next_free] <= atr_no_write_i;
+                    pwt_exec_req[next_free] <= atr_exec_req_i;
+                    pwt_priv_req[next_free] <= atr_priv_req_i;
+                    pwt_tee_req[next_free] <= atr_tee_req_i;
+                    pwt_req_tag[next_free] <= atr_tag_i;
                     pwt_next_state[next_free] <= WALK_SM_DDTC_PDTC_LOOKUP;
                     pwt_sub_state[next_free] <= 0;
                     pwt_pcvalid[next_free] <= 0;
                     pwt_ready_bitmap[next_free] <= 1;
-                    // for request bus to go idle
-                    if ( atr_irdy == 0 ) begin
+                    if ( atr_irdy_i == 0 ) begin
                         pgwk_in_flight <= pgwk_in_flight + 1;
                         req_rsp_st <= IDLE;
                     end
                 end
                 RSP_READY: begin
                     // wait for trdy
-                    if ( atc_trdy ) begin
+                    if ( atc_trdy_i ) begin
                         pwt_done_bitmap[next_done] <= 0;
                         pgwk_in_flight <= pgwk_in_flight - 1;
                         pwt_free_bitmap[next_done] <= 1;
@@ -292,7 +373,7 @@ module rv_iommu_walker
     always @(negedge rst_n or posedge clk) begin
         if ( rst_n == 0 ) begin
             pw_state <= PICK;
-            next_ready = 0;
+            next_ready <= 0;
         end
         else begin
             case ( pw_state ) 
@@ -313,7 +394,7 @@ module rv_iommu_walker
                         pwt_iotval2[next_ready] <= 0;
                         pw_state <= WALK_SM_FAULT_REPORT;
                     end else if ( ddtp_iommu_mode_i == DDT_BARE ) begin
-                        if ( pwt_req[next_read].addr_type != ADDR_TYPE_UNTRANSLATED ) begin
+                        if ( pwt_addr_type[next_ready] != ADDR_TYPE_UNTRANSLATED ) begin
                             pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
                             pwt_cause[next_ready] <= TRANS_TYPE_DISALLOWED;
                             pwt_iotval2[next_ready] <= 0;
@@ -332,7 +413,11 @@ module rv_iommu_walker
                         // Wait for the DDTC and PDTC (if looked up) to completed lookup
                         if ( (ddtc_lkup_fill_done_i == 1) && 
                              (pdtc_lkup_fill_done_i || ~pdtc_lookup_o) ) begin
-                            pwt_pc[next_ready] <= pc_i;
+                            pwt_pc_ens[next_ready] <= ens_i;
+                            pwt_pc_sum[next_ready] <= sum_i;
+                            pwt_pc_pscid[next_ready] <= pc_pscid_i;
+                            pwt_pc_fsc_mode[next_ready] <= pc_fsc_mode_i;
+                            pwt_pc_fsc_ppn[next_ready] <= pc_fsc_ppn_i;
                             pwt_pcvalid[next_ready] <= pdtc_hit_i & pdtc_lookup_o;
                             pwt_next_state[next_ready] <= WALK_SM_DDT_WALK;
                             if ( ddtc_hit_i == 1 ) begin 
@@ -356,17 +441,17 @@ module rv_iommu_walker
                                 pwt_sub_state[next_ready] <= DDT_CHECK_L0;
                             end else begin
                                 if (ddtp_iommu_mode_i == DDT_ONE_LEVEL) begin
-                                    ls_addr <= ((ddtp_ppn_i << 12) | (device_id_o[5:0] << 3));
+                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[5:0] * 8));
                                     ls_size <= 64;
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L0;
                                 end
                                 if (ddtp_iommu_mode_i == DDT_TWO_LEVEL) begin
-                                    ls_addr <= ((ddtp_ppn_i << 12) | (device_id_o[14:6] << 3));
+                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[14:6] * 8));
                                     ls_size <= 8;
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L1;
                                 end
                                 if (ddtp_iommu_mode_i == DDT_THREE_LEVEL) begin
-                                    ls_addr <= ((ddtp_ppn_i << 12) | (device_id_o[23:15] << 3));
+                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[23:15] * 8));
                                     ls_size <= 8;
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L2;
                                 end
@@ -417,13 +502,13 @@ module rv_iommu_walker
                                 pw_state <= WALK_SM_FAULT_REPORT;
                             end else begin
                                 if ( pwt_sub_state[next_ready] == DDT_CHECK_L2) begin
-                                    ls_addr <= ((pwt_ld_data[next_ready][45:12] << 12) | 
-                                                (device_id_o[14:6] << 3));
+                                    ls_addr <= ((pwt_ld_data[next_ready][45:12] * 4096 ) | 
+                                                (device_id_o[14:6] * 8));
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L1;
                                     ls_size <= 8;
                                 end else if ( pwt_sub_state[next_ready] == DDT_CHECK_L1) begin
-                                    ls_addr <= ((pwt_ld_data[next_ready][45:12] << 12) | 
-                                                (device_id_o[5:0] << 3));
+                                    ls_addr <= ((pwt_ld_data[next_ready][45:12] * 4096) | 
+                                                (device_id_o[5:0] * 8));
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L0;
                                     ls_size <= 64;
                                 end

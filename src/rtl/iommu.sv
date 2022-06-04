@@ -30,25 +30,48 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-`include "iommu.svh"
 module iommu 
     (
         input wire clk,
         input wire rst_n,
 
-        input wire mmio_ctrl_t mmio_ctl,
-        input wire [63:0] mmio_pwdata,
-        output wire [63:0] mmio_prdata,
+        input wire [11:0] paddr_i,
+        input wire        pwrite_i,
+        input wire        psel_i,
+        input wire        penable_i,
+        input wire [63:0] pwdata_i,
+        output wire [63:0] prdata_o,
 
         // Address Translation Request bus
-        input  wire pw_req_t pwreq,
-        input  wire pgwkr_irdy,
-        output wire pgwkr_trdy,
+        input wire [51:0]  atr_iova_i,
+        input wire [23:0]  atr_device_id_i,
+        input wire [19:0]  atr_process_id_i,
+        input wire [1:0]   atr_addr_type_i,
+        input wire         atr_read_write_i,
+        input wire         atr_pid_valid_i,
+        input wire         atr_no_write_i,
+        input wire         atr_exec_req_i,
+        input wire         atr_priv_req_i,
+        input wire         atr_tee_req_i,
+        input wire [7:0]   atr_tag_i,
+        input  wire        atr_irdy_i,
+        output wire        atr_trdy_o,
 
         // Address translation Completion bus
-        output wire pw_rsp_t pwrsp,
-        output wire pgwkc_irdy,
-        input  wire pgwkc_trdy
+        output wire [2:0]  atc_status_o,
+        output wire [33:0] atc_resp_pa_o,
+        output wire [7:0]  atc_tag_o,
+        output wire        atc_size_o,
+        output wire        atc_no_snoop_o,
+        output wire        atc_cxl_io_o,
+        output wire        atc_g_o,
+        output wire        atc_priv_o,
+        output wire        atc_exe_o,
+        output wire        atc_u_o,
+        output wire        atc_r_o,
+        output wire        atc_w_o,
+        output wire        atc_irdy_o,
+        input  wire        atc_trdy_i
     );
     `include "consts.vh"
 
@@ -101,8 +124,16 @@ module iommu
     wire pdtc_lookup, pdtc_fill, pdtc_lkup_fill_done; 
     wire [19:0] process_id;
     wire pdtc_hit; 
-    wire pc_t pc_from_pdtc; 
-    wire pc_t pc_to_pdtc;
+    wire        l_ens;
+    wire        l_sum;
+    wire [19:0] l_pscid;
+    wire [3:0]  l_pc_fsc_mode;
+    wire [33:0] l_pc_fsc_ppn;
+    wire        f_ens;
+    wire        f_sum;
+    wire [19:0] f_pscid;
+    wire [3:0]  f_pc_fsc_mode;
+    wire [33:0] f_pc_fsc_ppn;
     wire [23:0] pdtc_flush_device_id;
     wire [19:0] pdtc_flush_process_id;
     wire pdtc_flush;
@@ -111,7 +142,7 @@ module iommu
     // Page walker Load/Store request port to arbiter
     wire [45:0]       ls_addr_w;
     wire [1:0]        ls_op_w;
-    wire [MAX_PW-1:0] ls_tag_w;
+    wire [$clog2(MAX_PW)-1:0] ls_tag_w;
     wire [6:0]        ls_size_w;
     wire              ls_req_irdy_w;
     wire              ls_req_trdy_w;
@@ -120,16 +151,19 @@ module iommu
     wire [511:0]      ld_data_w;
     wire              ld_acc_fault_w;
     wire              ld_poison_w;
-    wire [MAX_PW-1:0] ld_tag_w;
+    wire [$clog2(MAX_PW)-1:0] ld_tag_w;
     wire              ld_data_irdy_w;
     wire              ld_data_trdy_w;
 
     rv_iommu_mmio mmio(
         .clk(clk),
         .rst_n(rst_n),
-        .mmio_ctl(mmio_ctl),
-        .pwdata(mmio_pwdata),
-        .prdata(mmio_prdata),
+        .paddr_i(paddr_i),
+        .pwrite_i(pwrite_i),
+        .psel_i(psel_i),
+        .penable_i(penable_i),
+        .pwdata_i(pwdata_i),
+        .prdata_o(prdata_o),
         .ddtp_pgwk_stall_req_o(ddtp_pgwk_stall_req),
         .ddtp_pgwk_idle_i(ddtp_pgwk_idle),
 
@@ -142,15 +176,36 @@ module iommu
         .rst_n(rst_n),
 
         // translation request interface
-        .atr_pwreq(pwreq),
-        .atr_irdy(pgwkr_irdy),
-        .atr_trdy(pgwkr_trdy),
+        .atr_iova_i(atr_iova_i),
+        .atr_device_id_i(atr_device_id_i),
+        .atr_process_id_i(atr_process_id_i),
+        .atr_addr_type_i(atr_addr_type_i),
+        .atr_read_write_i(atr_read_write_i),
+        .atr_pid_valid_i(atr_pid_valid_i),
+        .atr_no_write_i(atr_no_write_i),
+        .atr_exec_req_i(atr_exec_req_i),
+        .atr_priv_req_i(atr_priv_req_i),
+        .atr_tee_req_i(atr_tee_req_i),
+        .atr_tag_i(atr_tag_i),
+        .atr_irdy_i(atr_irdy_i),
+        .atr_trdy_o(atr_trdy_o),
 
 
         // translation response interface
-        .atc_pwrsp(pwrsp), 
-        .atc_irdy(pgwkc_irdy),
-        .atc_trdy(pgwkc_trdy),
+        .atc_status_o(atc_status_o),
+        .atc_resp_pa_o(atc_resp_pa_o),
+        .atc_tag_o(atc_tag_o),
+        .atc_size_o(atc_size_o),
+        .atc_no_snoop_o(atc_no_snoop_o),
+        .atc_cxl_io_o(atc_cxl_io_o),
+        .atc_g_o(atc_g_o),
+        .atc_priv_o(atc_priv_o),
+        .atc_exe_o(atc_exe_o),
+        .atc_u_o(atc_u_o),
+        .atc_r_o(atc_r_o),
+        .atc_w_o(atc_w_o),
+        .atc_irdy_o(atc_irdy_o),
+        .atc_trdy_i(atc_trdy_i),
 
         // Control signals - input
         .ddtp_pgwk_stall_req_i(ddtp_pgwk_stall_req),
@@ -211,10 +266,18 @@ module iommu
 
         // PDTC lookup result
         .pdtc_hit_i(pdtc_hit),
-        .pc_i(pc_from_pdtc),
+        .ens_i(l_ens),
+        .sum_i(l_sum),
+        .pc_pscid_i(l_pscid),
+        .pc_fsc_mode_i(l_pc_fsc_mode),
+        .pc_fsc_ppn_i(l_pc_fsc_ppn),
 
         // PDTC fill data
-        .pc_o(pc_to_pdtc),
+        .ens_o(f_ens),
+        .sum_o(f_sum),
+        .pc_pscid_o(f_pscid),
+        .pc_fsc_mode_o(f_pc_fsc_mode),
+        .pc_fsc_ppn_o(f_pc_fsc_ppn),
 
         // Load/store unit port
         .ls_addr_o(ls_addr_w),
@@ -299,9 +362,17 @@ module iommu
 
         // PDTC lookup result
         .pdtc_hit_o(pdtc_hit),
-        .pc_o(pc_from_pdtc),
+        .ens_o(l_ens),
+        .sum_o(l_sum),
+        .pscid_o(l_pscid),
+        .fsc_mode_o(l_fsc_mode),
+        .fsc_ppn_o(l_fsc_ppn),
         // PDTC fill data
-        .pc_i(pc_to_pdtc),
+        .ens_i(f_ens),
+        .sum_i(f_sum),
+        .pscid_i(f_pscid),
+        .fsc_mode_i(f_fsc_mode),
+        .fsc_ppn_i(f_fsc_ppn),
 
         // PDTC flush interface
         .flush_device_id_i(pdtc_flush_device_id),

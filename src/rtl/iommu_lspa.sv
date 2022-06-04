@@ -30,7 +30,6 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
-`include "iommu.svh"
 module rv_iommu_lspa
         (
         input wire      clk,
@@ -39,7 +38,7 @@ module rv_iommu_lspa
         // Load/store from walker
         input wire [45:0]       w_ls_addr_i,
         input wire [1:0]        w_ls_op_i,
-        input wire [1:0]        w_ls_tag_i,
+        output wire [$clog2(MAX_PW)-1:0] w_ls_tag_i,
         input wire [6:0]        w_ls_size_i,
         input wire              w_ls_req_irdy_i,
         output  wire            w_ls_req_trdy_o,
@@ -48,7 +47,7 @@ module rv_iommu_lspa
         output  wire [511:0]    w_ld_data_o,
         output  wire            w_ld_acc_fault_o,
         output  wire            w_ld_poison_o,
-        output  wire [1:0]      w_ld_tag_o,
+        output wire [$clog2(MAX_PW)-1:0] w_ld_tag_o,
         output  wire            w_ld_data_irdy_o,
         input wire              w_ld_data_trdy_i
     );
@@ -61,7 +60,7 @@ module rv_iommu_lspa
     reg [511:0] w_ld_data;
     reg w_ld_acc_fault;
     reg w_ld_poison;
-    reg w_ls_tag;
+    reg [$clog2(MAX_PW)-1:0] w_ls_tag;
     reg w_ld_data_irdy;
 
     assign w_ld_data_o = w_ld_data;
@@ -109,13 +108,13 @@ module rv_iommu_lspa
                     end
                 end
                 2 : begin
-                    w_ld_data_irdy = 1;
+                    w_ld_data_irdy <= 1;
                     if ( w_ld_data_trdy_i == 1 ) begin
                         state <= 3;
                     end
                 end
                 3 : begin
-                    w_ld_data_irdy = 0;
+                    w_ld_data_irdy <= 0;
                     if ( w_ld_data_trdy_i == 0 ) begin
                         state <= 0;
                     end

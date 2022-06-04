@@ -36,16 +36,16 @@
 #
 #===================================================================
 
-CORE_SRC=src/rtl/iommu_mmio.sv src/rtl/iommu_walker.sv src/rtl/iommu_ddtc.sv src/rtl/iommu_pdtc.sv src/rtl/iommu_lspa.sv
+CORE_SRC=./src/rtl/iommu_mmio.sv ./src/rtl/iommu_walker.sv ./src/rtl/iommu_ddtc.sv ./src/rtl/iommu_pdtc.sv ./src/rtl/iommu_lspa.sv
 
-TOP_SRC=src/rtl/iommu.sv $(CORE_SRC)
-TB_TOP_SRC=src/tb/tb_iommu.sv
+TOP_SRC=./src/rtl/iommu.sv $(CORE_SRC)
+TB_TOP_SRC=./src/tb/tb_iommu.sv
 
 CC = iverilog -g2012 -gstrict-expr-width -I src/rtl/
 CC_FLAGS = -Wall  
 
-LINT = verilator
-LINT_FLAGS = +1364-2001ext+ --lint-only  -Wall -Wno-fatal -Wno-DECLFILENAME
+LINT = verilator 
+LINT_FLAGS = +1364-2001ext+ +incdir+./src/rtl/ --lint-only  -Wall -Wno-fatal -Wno-DECLFILENAME 
 
 
 all: top.sim core.sim
