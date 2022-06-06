@@ -95,7 +95,7 @@ module iommu
     wire [33:0] l_fsc_ppn;
     wire [19:0] l_dc_pscid;
     wire [3:0]  l_msiptp_mode;
-    wire [43:0] l_msiptp_ppn;
+    wire [33:0] l_msiptp_ppn;
     wire [51:0] l_msi_addr_mask;
     wire [51:0] l_msi_addr_pat;
 
@@ -112,14 +112,14 @@ module iommu
     wire [33:0] f_fsc_ppn;
     wire [19:0] f_dc_pscid;
     wire [3:0]  f_msiptp_mode;
-    wire [43:0] f_msiptp_ppn;
+    wire [33:0] f_msiptp_ppn;
     wire [51:0] f_msi_addr_mask;
     wire [51:0] f_msi_addr_pat;
 
-    wire [23:0] ddtc_flush_device_id;
-    wire ddtc_flush;
-    wire ddtc_flush_device_id_valid;
-    wire ddtc_flush_done;
+    wire [23:0] ddtc_inval_device_id;
+    wire ddtc_inval;
+    wire ddtc_inval_device_id_valid;
+    wire ddtc_inval_done;
 
     wire pdtc_lookup, pdtc_fill, pdtc_lkup_fill_done; 
     wire [19:0] process_id;
@@ -134,10 +134,10 @@ module iommu
     wire [19:0] f_pscid;
     wire [3:0]  f_pc_fsc_mode;
     wire [33:0] f_pc_fsc_ppn;
-    wire [23:0] pdtc_flush_device_id;
-    wire [19:0] pdtc_flush_process_id;
-    wire pdtc_flush;
-    wire pdtc_flush_done;
+    wire [23:0] pdtc_inval_device_id;
+    wire [19:0] pdtc_inval_process_id;
+    wire pdtc_inval;
+    wire pdtc_inval_done;
 
     // Page walker Load/Store request port to arbiter
     wire [45:0]       ls_addr_w;
@@ -343,11 +343,11 @@ module iommu
         .msi_addr_mask_i(f_msi_addr_mask),
         .msi_addr_pat_i(f_msi_addr_pat),
 
-        // DDTC flush interface
-        .flush_device_id_i(ddtc_flush_device_id),
-        .ddtc_flush_i(1'b0),
-        .flush_device_id_valid_i(ddtc_flush_device_id_valid),
-        .ddtc_flush_done_o(ddtc_flush_done)
+        // DDTC inval interface - TODO: inval is tied off
+        .inval_device_id_i(ddtc_inval_device_id),
+        .ddtc_inval_i(1'b0),
+        .inval_device_id_valid_i(ddtc_inval_device_id_valid),
+        .ddtc_inval_done_o(ddtc_inval_done)
     );
     rv_iommu_pdtc pdtc(
         .clk(clk),
@@ -374,11 +374,11 @@ module iommu
         .fsc_mode_i(f_fsc_mode),
         .fsc_ppn_i(f_fsc_ppn),
 
-        // PDTC flush interface
-        .flush_device_id_i(pdtc_flush_device_id),
-        .flush_process_id_i(pdtc_flush_process_id),
-        .pdtc_flush_i(1'b0),
-        .pdtc_flush_done_o(pdtc_flush_done)
+        // PDTC inval interface
+        .inval_device_id_i(pdtc_inval_device_id),
+        .inval_process_id_i(pdtc_inval_process_id),
+        .pdtc_inval_i(1'b0),
+        .pdtc_inval_done_o(pdtc_inval_done)
     );
     rv_iommu_lspa lspa (
         .clk(clk),

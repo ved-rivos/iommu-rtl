@@ -31,247 +31,205 @@
 //
 //======================================================================
 module rv_iommu_ddtc
+       #(parameter MAX_PPN=34,
+         parameter MAX_PA=46,
+         parameter MAX_DDTC_ENTRIES=4)
         (
-        input wire      clk,
-        input wire      rst_n,
+        input wire                clk,
+        input wire                rst_n,
 
         // Lookup/fill port
-        input  wire        ddtc_lookup_i,
-        input  wire        ddtc_fill_i,
-        input  wire [23:0] device_id_i,
+        input  wire               ddtc_lookup_i,
+        input  wire               ddtc_fill_i,
+        input  wire [23:0]        device_id_i,
 
         // DDTC lookup result
-        output wire        ddtc_lkup_fill_done_o,
-        output wire        ddtc_hit_o,
-        output wire        en_ats_o,
-        output wire        en_pri_o,
-        output wire        t2gpa_o,
-        output wire        dtf_o,
-        output wire        pdtv_o,
-        output wire        prpr_o,
-        output wire [3:0]  iohgatp_mode_o,
-        output wire [15:0] gscid_o,
-        output wire [33:0] iohgatp_ppn_o,
-        output wire [3:0]  fsc_mode_o,
-        output wire [33:0] fsc_ppn_o,
-        output wire [19:0] dc_pscid_o,
-        output wire [3:0]  msiptp_mode_o,
-        output wire [43:0] msiptp_ppn_o,
-        output wire [51:0] msi_addr_mask_o,
-        output wire [51:0] msi_addr_pat_o,
+        output wire               ddtc_lkup_fill_done_o,
+        output wire               ddtc_hit_o,
+        output wire               en_ats_o,
+        output wire               en_pri_o,
+        output wire               t2gpa_o,
+        output wire               dtf_o,
+        output wire               pdtv_o,
+        output wire               prpr_o,
+        output wire [3:0]         iohgatp_mode_o,
+        output wire [15:0]        gscid_o,
+        output wire [MAX_PPN-1:0] iohgatp_ppn_o,
+        output wire [3:0]         fsc_mode_o,
+        output wire [MAX_PPN-1:0] fsc_ppn_o,
+        output wire [19:0]        dc_pscid_o,
+        output wire [3:0]         msiptp_mode_o,
+        output wire [MAX_PPN-1:0] msiptp_ppn_o,
+        output wire [51:0]        msi_addr_mask_o,
+        output wire [51:0]        msi_addr_pat_o,
 
         // DDTC fill data
-        input wire        en_ats_i,
-        input wire        en_pri_i,
-        input wire        t2gpa_i,
-        input wire        dtf_i,
-        input wire        pdtv_i,
-        input wire        prpr_i,
-        input wire [3:0]  iohgatp_mode_i,
-        input wire [15:0] gscid_i,
-        input wire [33:0] iohgatp_ppn_i,
-        input wire [3:0]  fsc_mode_i,
-        input wire [33:0] fsc_ppn_i,
-        input wire [19:0] dc_pscid_i,
-        input wire [3:0]  msiptp_mode_i,
-        input wire [43:0] msiptp_ppn_i,
-        input wire [51:0] msi_addr_mask_i,
-        input wire [51:0] msi_addr_pat_i,
+        input wire               en_ats_i,
+        input wire               en_pri_i,
+        input wire               t2gpa_i,
+        input wire               dtf_i,
+        input wire               pdtv_i,
+        input wire               prpr_i,
+        input wire [3:0]         iohgatp_mode_i,
+        input wire [15:0]        gscid_i,
+        input wire [MAX_PPN-1:0] iohgatp_ppn_i,
+        input wire [3:0]         fsc_mode_i,
+        input wire [MAX_PPN-1:0] fsc_ppn_i,
+        input wire [19:0]        dc_pscid_i,
+        input wire [3:0]         msiptp_mode_i,
+        input wire [MAX_PPN-1:0] msiptp_ppn_i,
+        input wire [51:0]        msi_addr_mask_i,
+        input wire [51:0]        msi_addr_pat_i,
 
-        // flush port
-        input  wire [23:0] flush_device_id_i,
-        input  wire        ddtc_flush_i,
-        input  wire        flush_device_id_valid_i,
-        output wire        ddtc_flush_done_o
+        // invalidate port
+        input  wire [23:0]       inval_device_id_i,
+        input  wire              inval_device_id_valid_i,
+        input  wire              ddtc_inval_i,
+        output wire              ddtc_inval_done_o
     );
-    reg ddtc_lkup_fill_done, ddtc_flush_done;
-    reg ddtc_hit[4];
-    reg [1:0] hit_row;
-    reg [2:0] i;
+    reg                                ddtc_hit;
+    reg [$clog2(MAX_DDTC_ENTRIES)-1:0] hit_row;
 
-    reg        dcc_en_ats[4];
-    reg        dcc_en_pri[4];
-    reg        dcc_t2gpa[4];
-    reg        dcc_dtf[4];
-    reg        dcc_pdtv[4];
-    reg        dcc_prpr[4];
-    reg [3:0]  dcc_iohgatp_mode[4];
-    reg [15:0] dcc_gscid[4];
-    reg [33:0] dcc_iohgatp_ppn[4];
-    reg [3:0]  dcc_fsc_mode[4];
-    reg [33:0] dcc_fsc_ppn[4];
-    reg [19:0] dcc_dc_pscid[4];
-    reg [3:0]  dcc_msiptp_mode[4];
-    reg [43:0] dcc_msiptp_ppn[4];
-    reg [51:0] dcc_msi_addr_mask[4];
-    reg [51:0] dcc_msi_addr_pat[4];
-    reg [23:0] device_id_tag[4];
-    reg        valid[4];
-    reg [2:0]  lru;
-    reg [2:0]  victim;
+    // Device context cache state
+    reg                                ddtc_en_ats[MAX_DDTC_ENTRIES];
+    reg                                ddtc_en_pri[MAX_DDTC_ENTRIES];
+    reg                                ddtc_t2gpa[MAX_DDTC_ENTRIES];
+    reg                                ddtc_dtf[MAX_DDTC_ENTRIES];
+    reg                                ddtc_pdtv[MAX_DDTC_ENTRIES];
+    reg                                ddtc_prpr[MAX_DDTC_ENTRIES];
+    reg [3:0]                          ddtc_iohgatp_mode[MAX_DDTC_ENTRIES];
+    reg [15:0]                         ddtc_gscid[MAX_DDTC_ENTRIES];
+    reg [MAX_PPN-1:0]                  ddtc_iohgatp_ppn[MAX_DDTC_ENTRIES];
+    reg [3:0]                          ddtc_fsc_mode[MAX_DDTC_ENTRIES];
+    reg [MAX_PPN-1:0]                  ddtc_fsc_ppn[MAX_DDTC_ENTRIES];
+    reg [19:0]                         ddtc_dc_pscid[MAX_DDTC_ENTRIES];
+    reg [3:0]                          ddtc_msiptp_mode[MAX_DDTC_ENTRIES];
+    reg [MAX_PPN-1:0]                  ddtc_msiptp_ppn[MAX_DDTC_ENTRIES];
+    reg [51:0]                         ddtc_msi_addr_mask[MAX_DDTC_ENTRIES];
+    reg [51:0]                         ddtc_msi_addr_pat[MAX_DDTC_ENTRIES];
+    reg [23:0]                         ddtc_device_id_tag[MAX_DDTC_ENTRIES];
+    reg [MAX_DDTC_ENTRIES-1:0]         ddtc_valid;
+    reg [$clog2(MAX_DDTC_ENTRIES):0]   lru, lru_q;
+    reg [$clog2(MAX_DDTC_ENTRIES)-1:0] victim, victim_q;
 
-    assign ddtc_flush_done_o = ddtc_flush_i & !ddtc_lookup_i & !ddtc_fill_i;
-    assign ddtc_lkup_fill_done_o = !ddtc_flush_i & (ddtc_lookup_i | !ddtc_fill_i);
-    assign ddtc_hit_o = ddtc_hit[0] | ddtc_hit[1] | ddtc_hit[2] | ddtc_hit[3];
+    // Device context cache output signals
+    assign ddtc_inval_done_o = 
+                ddtc_inval_i & !ddtc_lookup_i & !ddtc_fill_i;
+    assign ddtc_lkup_fill_done_o = 
+                (!ddtc_inval_i & (ddtc_lookup_i | ddtc_fill_i));
+    assign ddtc_hit_o = ddtc_hit;
+    assign en_ats_o = ddtc_en_ats[hit_row];
+    assign en_pri_o = ddtc_en_pri[hit_row];
+    assign t2gpa_o = ddtc_t2gpa[hit_row];
+    assign dtf_o = ddtc_dtf[hit_row];
+    assign pdtv_o = ddtc_pdtv[hit_row];
+    assign prpr_o = ddtc_prpr[hit_row];
+    assign iohgatp_mode_o = ddtc_iohgatp_mode[hit_row];
+    assign gscid_o = ddtc_gscid[hit_row];
+    assign iohgatp_ppn_o = ddtc_iohgatp_ppn[hit_row];
+    assign fsc_mode_o = ddtc_fsc_mode[hit_row];
+    assign fsc_ppn_o = ddtc_fsc_ppn[hit_row];
+    assign dc_pscid_o = ddtc_dc_pscid[hit_row];
+    assign msiptp_mode_o = ddtc_msiptp_mode[hit_row];
+    assign msiptp_ppn_o = ddtc_msiptp_ppn[hit_row];
+    assign msi_addr_mask_o = ddtc_msi_addr_mask[hit_row];
+    assign msi_addr_pat_o = ddtc_msi_addr_pat[hit_row];
 
-    assign en_ats_o = dcc_en_ats[hit_row];
-    assign en_pri_o = dcc_en_pri[hit_row];
-    assign t2gpa_o = dcc_t2gpa[hit_row];
-    assign dtf_o = dcc_dtf[hit_row];
-    assign pdtv_o = dcc_pdtv[hit_row];
-    assign prpr_o = dcc_prpr[hit_row];
-    assign iohgatp_mode_o = dcc_iohgatp_mode[hit_row];
-    assign gscid_o = dcc_gscid[hit_row];
-    assign iohgatp_ppn_o = dcc_iohgatp_ppn[hit_row];
-    assign fsc_mode_o = dcc_fsc_mode[hit_row];
-    assign fsc_ppn_o = dcc_fsc_ppn[hit_row];
-    assign dc_pscid_o = dcc_dc_pscid[hit_row];
-    assign msiptp_mode_o = dcc_msiptp_mode[hit_row];
-    assign msiptp_ppn_o = dcc_msiptp_ppn[hit_row];
-    assign msi_addr_mask_o = dcc_msi_addr_mask[hit_row];
-    assign msi_addr_pat_o = dcc_msi_addr_pat[hit_row];
-
-    // pick invalid as victim or the lru if all valid
-    //always_comb begin
-    always @(negedge rst_n or negedge ddtc_fill_i) begin
+    // Device context cache process
+    always @(negedge rst_n or posedge clk) begin
         if ( rst_n == 0 ) begin
-            valid[0] = 0;
-            valid[1] = 0;
-            valid[2] = 0;
-            valid[3] = 0;
-            lru = 3'b000;
-            ddtc_lkup_fill_done <= 0;
-            ddtc_hit[0] = 0;
-            ddtc_hit[1] = 0;
-            ddtc_hit[2] = 0;
-            ddtc_hit[3] = 0;
-            ddtc_flush_done <= 0;
+            ddtc_valid <= 4'b0000;
+            victim_q <= 0;
+            lru_q <= 0;
+        end else begin
+            victim_q <= victim;
+            lru_q <= lru;
         end
-        if ( valid[0] & valid[1] & valid[2] & valid[3] ) begin
+    end
+    // pick a invalid entry as victim; if all valid then pick
+    // LRU entry as victim
+    always_comb begin
+        victim = victim_q;
+        casez (ddtc_valid)
+            4'b???0: victim = 0;
+            4'b??01: victim = 1;
+            4'b?011: victim = 2;
+            4'b0111: victim = 3;
+            4'b1111:
                 casez (lru)
                     3'b00?: victim = 0;
                     3'b10?: victim = 1;
                     3'b?10: victim = 2;
                     3'b?11: victim = 3;
                 endcase
-        end else begin
-            victim = valid[0] == 0 ? 0 :
-                     valid[1] == 0 ? 1 :
-                     valid[2] == 0 ? 2 : 3;
-        end
+        endcase
     end
-    genvar k;
-    generate
-        for ( k = 0; k < 4; k++) begin
-            always_comb begin
-                if ( k == victim && !ddtc_flush_i && !ddtc_lookup_i && ddtc_fill_i ) begin
-                    device_id_tag[k] = device_id_i;
-                    dcc_en_ats[k] = en_ats_i;
-                    dcc_en_pri[k] = en_pri_i;
-                    dcc_t2gpa[k] = t2gpa_i;
-                    dcc_dtf[k] = dtf_i;
-                    dcc_pdtv[k] = pdtv_i;
-                    dcc_prpr[k] = prpr_i;
-                    dcc_iohgatp_mode[k] = iohgatp_mode_i;
-                    dcc_gscid[k] = gscid_i;
-                    dcc_iohgatp_ppn[k] = iohgatp_ppn_i;
-                    dcc_fsc_mode[k] = fsc_mode_i;
-                    dcc_fsc_ppn[k] = fsc_ppn_i;
-                    dcc_dc_pscid[k] = dc_pscid_i;
-                    dcc_msiptp_mode[k] = msiptp_mode_i;
-                    dcc_msiptp_ppn[k] = msiptp_ppn_i;
-                    dcc_msi_addr_mask[k] = msi_addr_mask_i;
-                    dcc_msi_addr_pat[k] = msi_addr_pat_i;
-                    valid[k] = 1;
-                end
+    // DDT LRU update logic; make hit entry as MRU
+    always_comb begin
+        lru = lru_q;
+        case ({ddtc_hit, hit_row})
+            3'b100: lru = (lru & 3'b001) | 3'b110;
+            3'b101: lru = (lru & 3'b001) | 3'b010;
+            3'b110: lru = (lru & 3'b100) | 3'b001;
+            3'b111: lru = (lru & 3'b100) | 3'b000;
+        endcase
+    end
+    // DDT cache fill logic
+    always_comb begin
+        int f;
+        for ( f = 0; f < MAX_DDTC_ENTRIES; f++) begin
+            // replace a victim entry with the new tag and data
+            if ( (f == victim_q) && 
+                 !ddtc_inval_i && !ddtc_lookup_i && ddtc_fill_i ) begin
+                ddtc_device_id_tag[f] = device_id_i;
+                ddtc_en_ats[f] = en_ats_i;
+                ddtc_en_pri[f] = en_pri_i;
+                ddtc_t2gpa[f] = t2gpa_i;
+                ddtc_dtf[f] = dtf_i;
+                ddtc_pdtv[f] = pdtv_i;
+                ddtc_prpr[f] = prpr_i;
+                ddtc_iohgatp_mode[f] = iohgatp_mode_i;
+                ddtc_gscid[f] = gscid_i;
+                ddtc_iohgatp_ppn[f] = iohgatp_ppn_i;
+                ddtc_fsc_mode[f] = fsc_mode_i;
+                ddtc_fsc_ppn[f] = fsc_ppn_i;
+                ddtc_dc_pscid[f] = dc_pscid_i;
+                ddtc_msiptp_mode[f] = msiptp_mode_i;
+                ddtc_msiptp_ppn[f] = msiptp_ppn_i;
+                ddtc_msi_addr_mask[f] = msi_addr_mask_i;
+                ddtc_msi_addr_pat[f] = msi_addr_pat_i;
+                ddtc_valid = ddtc_valid | (1 << f);
+            end
+        end   
+    end
+    // DDT cache lookup logic
+    always_comb begin
+        int t;
+        ddtc_hit = 0;
+        hit_row = 0;
+        for ( t = 0; t < MAX_DDTC_ENTRIES; t++) begin
+            // Signal hit if a valid tag matches. If invalidation in 
+            // progress then hold off signaling hit
+            if ( (ddtc_device_id_tag[t] == device_id_i) && ddtc_valid[t] && 
+                 !ddtc_inval_i && ddtc_lookup_i && !ddtc_fill_i ) begin
+                ddtc_hit = 1;
+                hit_row = t;
             end
         end
-    endgenerate
-
-    generate
-    for ( k = 0; k < 4; k++) begin
-        always_comb begin
-            if ( (device_id_tag[k] == device_id_i) && valid[k] && !ddtc_flush_i && ddtc_lookup_i && !ddtc_fill_i ) begin
-                ddtc_hit[k] = 1;
-                hit_row = k;
-                case (k)
-                    0: lru = (lru & 3'b001) | 3'b110;
-                    1: lru = (lru & 3'b001) | 3'b010;
-                    2: lru = (lru & 3'b100) | 3'b001;
-                    3: lru = (lru & 3'b100) | 3'b000;
-                endcase
+    end 
+    // DDT cache invalidation logic
+    always_comb begin
+        int i;
+        for ( i = 0; i < MAX_DDTC_ENTRIES; i++) begin
+            // If device ID specified then mark that entry invalid else mark all
+            // entries invalid Do not invalidate entries when a fill or lookup 
+            // is in progress
+            if ( (((inval_device_id_valid_i == 1) && 
+                   (ddtc_device_id_tag[i] == inval_device_id_i) && ddtc_valid[i]) |
+                  (inval_device_id_valid_i == 0)) && 
+                 ddtc_inval_i && !ddtc_lookup_i && !ddtc_fill_i ) begin
+                ddtc_valid[i] = 0;
             end
         end
     end
-    endgenerate
-
-    generate
-    for ( k = 0; k < 4; k++) begin
-        always_comb begin
-            if ( (((flush_device_id_valid_i == 1) && (device_id_tag[k] == flush_device_id_i)) |
-                  (flush_device_id_valid_i == 0)) && ddtc_flush_i && !ddtc_lookup_i && !ddtc_fill_i ) begin
-                valid[k] = 0;
-            end
-        end
-    end
-    endgenerate
-
-
-//    always @(negedge rst_n or posedge ddtc_flush_i or posedge ddtc_lookup_i or posedge ddtc_fill_i or 
-//                              negedge ddtc_flush_i or negedge ddtc_lookup_i or negedge ddtc_fill_i ) begin
-//        if ( rst_n == 0 ) begin
-//            valid <= 4'b0000;
-//            lru = 3'b000;
-//            ddtc_lkup_fill_done <= 0;
-//            ddtc_hit <= 0;
-//            ddtc_flush_done <= 0;
-//        end
-//        else begin
-//            // Flush logic
-//            if ( ddtc_flush_i && !ddtc_fill_i && !ddtc_lookup_i && ddtc_flush_done == 0 ) begin
-//                do_flush <= 1;
-//                ddtc_flush_done <= 1;
-//            end
-//            if ( ddtc_flush_i == 0 && ddtc_flush_done == 1) begin
-//                ddtc_flush_done <= 0;
-//            end
-//            // Fill logic - invoked if no lookup or flush being done
-//            if ( ddtc_fill_i && !ddtc_lookup_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
-//                //victim <= make_victim();
-//                device_id_tag[victim] <= device_id_i;
-//                dcc_en_ats[victim] <= en_ats_i;
-//                dcc_en_pri[victim] <= en_pri_i;
-//                dcc_t2gpa[victim] <= t2gpa_i;
-//                dcc_dtf[victim] <= dtf_i;
-//                dcc_pdtv[victim] <= pdtv_i;
-//                dcc_prpr[victim] <= prpr_i;
-//                dcc_iohgatp_mode[victim] <= iohgatp_mode_i;
-//                dcc_gscid[victim] <= gscid_i;
-//                dcc_iohgatp_ppn[victim] <= iohgatp_ppn_i;
-//                dcc_fsc_mode[victim] <= fsc_mode_i;
-//                dcc_fsc_ppn[victim] <= fsc_ppn_i;
-//                dcc_dc_pscid[victim] <= dc_pscid_i;
-//                dcc_msiptp_mode[victim] <= msiptp_mode_i;
-//                dcc_msiptp_ppn[victim] <= msiptp_ppn_i;
-//                dcc_msi_addr_mask[victim] <= msi_addr_mask_i;
-//                dcc_msi_addr_pat[victim] <= msi_addr_pat_i;
-//                valid[victim] <= 1;
-//                ddtc_lkup_fill_done <= 1;
-//            end
-//            // Lookup logic - invoked if no fill or flush being done
-//            if ( ddtc_lookup_i && !ddtc_fill_i && !ddtc_flush_i && ddtc_lkup_fill_done == 0) begin
-//                for ( i = 0; i < 4; i++) begin
-//                    if ( (device_id_tag[i[1:0]] == device_id_i) && valid[i[1:0]] ) begin
-//                        hit_row <= i[1:0];
-//                        ddtc_hit <= 1;
-//                    end
-//                end
-//                ddtc_lkup_fill_done <= 1;
-//            end
-//            if ( ddtc_lkup_fill_done == 1 && ddtc_lookup_i == 0 && ddtc_fill_i == 0) begin
-//                ddtc_lkup_fill_done <= 0;
-//                ddtc_hit <= 0;
-//            end
-//        end
-//    end
 endmodule

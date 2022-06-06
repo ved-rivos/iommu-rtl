@@ -30,6 +30,7 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 //======================================================================
+`include "iommu_walker_macros.svh"
 module rv_iommu_walker
         (
         input wire      clk,
@@ -95,7 +96,7 @@ module rv_iommu_walker
         input wire [33:0] fsc_ppn_i,
         input wire [19:0] dc_pscid_i,
         input wire [3:0]  msiptp_mode_i,
-        input wire [43:0] msiptp_ppn_i,
+        input wire [33:0] msiptp_ppn_i,
         input wire [51:0] msi_addr_mask_i,
         input wire [51:0] msi_addr_pat_i,
         // DDTC fill data
@@ -112,7 +113,7 @@ module rv_iommu_walker
         output wire [33:0] fsc_ppn_o,
         output wire [19:0] dc_pscid_o,
         output wire [3:0]  msiptp_mode_o,
-        output wire [43:0] msiptp_ppn_o,
+        output wire [33:0] msiptp_ppn_o,
         output wire [51:0] msi_addr_mask_o,
         output wire [51:0] msi_addr_pat_o,
 
@@ -159,6 +160,7 @@ module rv_iommu_walker
 
     // Input request in page walk tracker
     reg [51:0]  pwt_iova[MAX_PW];
+    reg [11:0]  pwt_len[MAX_PW];
     reg [23:0]  pwt_device_id[MAX_PW];
     reg [19:0]  pwt_process_id[MAX_PW];
     reg [1:0]   pwt_addr_type[MAX_PW];
@@ -338,6 +340,7 @@ module rv_iommu_walker
                     // Initialize the page walk tracker
                     pwt_free_bitmap[next_free] <= 0;
                     pwt_iova[next_free] <= atr_iova_i;
+                    pwt_len[next_free] <= atr_len_i;
                     pwt_device_id[next_free] <= atr_device_id_i;
                     pwt_process_id[next_free] <= atr_process_id_i;
                     pwt_addr_type[next_free] <= atr_addr_type_i;
@@ -369,6 +372,7 @@ module rv_iommu_walker
             endcase
         end
     end
+
     // page walk state machine
     always @(negedge rst_n or posedge clk) begin
         if ( rst_n == 0 ) begin
@@ -378,70 +382,53 @@ module rv_iommu_walker
         else begin
             case ( pw_state ) 
                 PICK: begin
-                    if ( is_any_tracker_ready ) begin
-                        // Pick next ready request from PWT
+                    if ( is_any_tracker_ready && 
+                         (ddtc_lkup_fill_done_i == 0) ) begin
                         while ( pwt_ready_bitmap[next_ready] == 0 ) begin
-                            next_ready <= next_ready + 1;
-                            next_ready <= next_ready & (MAX_PW - 1);
+                            next_ready = next_ready + 1;
+                            next_ready = next_ready & (MAX_PW - 1);
                         end
                         pw_state <= pwt_next_state[next_ready];
                     end
                 end
                 WALK_SM_DDTC_PDTC_LOOKUP: begin
                     if ( ddtp_iommu_mode_i == IOMMU_OFF ) begin
-                        pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                        pwt_cause[next_ready] <= ALL_IB_TRANS_DISALLOWED;
-                        pwt_iotval2[next_ready] <= 0;
-                        pw_state <= WALK_SM_FAULT_REPORT;
+                        `report_fault(ALL_IB_TRANS_DISALLOWED);
                     end else if ( ddtp_iommu_mode_i == DDT_BARE ) begin
                         if ( pwt_addr_type[next_ready] != ADDR_TYPE_UNTRANSLATED ) begin
-                            pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                            pwt_cause[next_ready] <= TRANS_TYPE_DISALLOWED;
-                            pwt_iotval2[next_ready] <= 0;
-                            pw_state <= WALK_SM_FAULT_REPORT;
+                            `report_fault(TRANS_TYPE_DISALLOWED);
                         end
                     end else if ( (ddtp_iommu_mode_i == DDT_TWO_LEVEL && 
                                    device_id_o[23:15] != 0) || 
                                   (ddtp_iommu_mode_i == DDT_ONE_LEVEL && 
                                    device_id_o[23:6] != 0) ) begin
                         // device ID too wide for mode
-                        pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                        pwt_cause[next_ready] <= TRANS_TYPE_DISALLOWED;
-                        pwt_iotval2[next_ready] <= 0;
-                        pw_state <= WALK_SM_FAULT_REPORT;
+                        `report_fault(TRANS_TYPE_DISALLOWED);
                     end else begin
                         // Wait for the DDTC and PDTC (if looked up) to completed lookup
                         if ( (ddtc_lkup_fill_done_i == 1) && 
                              (pdtc_lkup_fill_done_i || ~pdtc_lookup_o) ) begin
-                            pwt_pc_ens[next_ready] <= ens_i;
-                            pwt_pc_sum[next_ready] <= sum_i;
-                            pwt_pc_pscid[next_ready] <= pc_pscid_i;
-                            pwt_pc_fsc_mode[next_ready] <= pc_fsc_mode_i;
-                            pwt_pc_fsc_ppn[next_ready] <= pc_fsc_ppn_i;
-                            pwt_pcvalid[next_ready] <= pdtc_hit_i & pdtc_lookup_o;
-                            pwt_next_state[next_ready] <= WALK_SM_DDT_WALK;
+                            if ( pdtc_hit_i == 1 ) begin 
+                                // Store PDT information in tracker
+                                `store_pdtc_info_in_pwt();
+                            end
                             if ( ddtc_hit_i == 1 ) begin 
-                                pwt_en_ats[next_ready] <= en_ats_i;
-                                pwt_en_pri[next_ready] <= en_pri_i;
-                                pwt_t2gpa[next_ready] <= t2gpa_i;
-                                pwt_dtf[next_ready] <= dtf_i;
-                                pwt_pdtv[next_ready] <= pdtv_i;
-                                pwt_prpr[next_ready] <= prpr_i;
-                                pwt_iohgatp_mode[next_ready] <= iohgatp_mode_i;
-                                pwt_gscid[next_ready] <= gscid_i;
-                                pwt_iohgatp_ppn[next_ready] <= iohgatp_ppn_i;
-                                pwt_fsc_mode[next_ready] <= fsc_mode_i;
-                                pwt_fsc_ppn[next_ready] <= fsc_ppn_i;
-                                pwt_dc_pscid[next_ready] <= dc_pscid_i;
-                                pwt_msiptp_mode[next_ready] <= msiptp_mode_i;
-                                pwt_msiptp_ppn[next_ready] <= msiptp_ppn_i;
-                                pwt_msi_addr_mask[next_ready] <= msi_addr_mask_i;
-                                pwt_msi_addr_pat[next_ready] <= msi_addr_pat_i;
-                                $display("%x", msi_addr_pat_i);
-                                pwt_sub_state[next_ready] <= DDT_CHECK_L0;
+                                // Store DDT information in tracker
+                                `store_ddtc_info_in_pwt();
+
+                                // If process_id is valid and process directory
+                                // table cache missed then start PDT walk
+                                // Else directories are done; start translation
+                                if ( pdtc_hit_i == 0 && 
+                                     pwt_pid_valid[next_ready] == 1) begin
+                                    pw_state <= WALK_SM_PDT_WALK;
+                                end else begin
+                                    pw_state <= WALK_SM_DDT_PDT_DONE;
+                                end
                             end else begin
+                                // DDTC miss, start walk depending on mode
                                 if (ddtp_iommu_mode_i == DDT_ONE_LEVEL) begin
-                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[5:0] * 8));
+                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[5:0] * 64));
                                     ls_size <= 64;
                                     pwt_sub_state[next_ready] <= DDT_LOAD_L0;
                                 end
@@ -457,8 +444,8 @@ module rv_iommu_walker
                                 end
                                 ls_op <= LOAD;
                                 ls_req_irdy <= 1;
+                                pw_state <= WALK_SM_DDT_WALK;
                             end
-                            pw_state <= WALK_SM_DDT_WALK;
                         end
                     end
                 end 
@@ -478,28 +465,19 @@ module rv_iommu_walker
                                 end
                                 pwt_ready_bitmap[next_ready] <= 0;
                                 ls_req_irdy <= 0;
-                                pw_state <= PICK;
                             end
                         end
 
                         DDT_CHECK_L1, DDT_CHECK_L2: begin
-                            if ( pwt_acc_fault[next_ready] == 1 || pwt_poison[next_ready] == 1 ) begin
-                                pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                pwt_cause[next_ready] <= (pwt_poison[next_ready] == 1) ?
-                                                          DDT_DATA_CORRUPTION : DDT_LOAD_ACC_FAULT;
-                                pwt_iotval2[next_ready] <= 0;
-                                pw_state <= WALK_SM_FAULT_REPORT;
+                            if ( pwt_acc_fault[next_ready] == 1 ) begin
+                                `report_fault(DDT_LOAD_ACC_FAULT);
+                            end else if ( pwt_poison[next_ready] == 1 ) begin
+                                `report_fault(DDT_DATA_CORRUPTION);
                             end else if ( pwt_ld_data[next_ready][0] == 0 ) begin
-                                pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                pwt_cause[next_ready] <= DDT_ENTRY_NOT_VALID;
-                                pwt_iotval2[next_ready] <= 0;
-                                pw_state <= WALK_SM_FAULT_REPORT;
+                                `report_fault(DDT_ENTRY_NOT_VALID);
                             end else if ( pwt_ld_data[next_ready][11:1] != 0  ||
                                           pwt_ld_data[next_ready][63:46] != 0 ) begin
-                                pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                pwt_cause[next_ready] <= DDT_ENTRY_MISCONFIGURED;
-                                pwt_iotval2[next_ready] <= 0;
-                                pw_state <= WALK_SM_FAULT_REPORT;
+                                `report_fault(DDT_ENTRY_MISCONFIGURED);
                             end else begin
                                 if ( pwt_sub_state[next_ready] == DDT_CHECK_L2) begin
                                     ls_addr <= ((pwt_ld_data[next_ready][45:12] * 4096 ) | 
@@ -518,40 +496,11 @@ module rv_iommu_walker
                         end
                         DDT_CHECK_L0: begin
                             if ( pwt_ld_data[next_ready][0] == 0 ) begin
-                                pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                pwt_cause[next_ready] <= DDT_ENTRY_NOT_VALID;
-                                pwt_iotval2[next_ready] <= 0;
-                                pw_state <= WALK_SM_FAULT_REPORT;
+                                `report_fault(DDT_ENTRY_NOT_VALID);
                             end else begin
-                                pwt_en_ats[next_ready] <= pwt_ld_data[next_ready][1];
-                                pwt_en_pri[next_ready] <= pwt_ld_data[next_ready][2];
-                                pwt_t2gpa[next_ready] <= pwt_ld_data[next_ready][3];
-                                pwt_dtf[next_ready] <= pwt_ld_data[next_ready][4];
-                                pwt_pdtv[next_ready] <= pwt_ld_data[next_ready][5];
-                                pwt_prpr[next_ready] <= pwt_ld_data[next_ready][6];
-                                pwt_iohgatp_mode[next_ready] <= pwt_ld_data[next_ready][127:124];
-                                pwt_gscid[next_ready] <= pwt_ld_data[next_ready][123:108];
-                                pwt_iohgatp_ppn[next_ready] <= pwt_ld_data[next_ready][97:64];
-                                pwt_fsc_mode[next_ready] <= pwt_ld_data[next_ready][191:188];
-                                pwt_fsc_ppn[next_ready] <= pwt_ld_data[next_ready][161:128];
-                                pwt_dc_pscid[next_ready] <= pwt_ld_data[next_ready][255:236];
-                                pwt_msiptp_mode[next_ready] <= pwt_ld_data[next_ready][319:316];
-                                pwt_msiptp_ppn[next_ready] <= pwt_ld_data[next_ready][289:256];
-                                pwt_msi_addr_mask[next_ready] <= pwt_ld_data[next_ready][371:320];
-                                pwt_msi_addr_pat[next_ready] <= pwt_ld_data[next_ready][435:384];
-                                if ( |(pwt_ld_data[next_ready] & DC_RSVD_BIT_MAP) ||
-                                     (pwt_iohgatp_mode[next_ready] != IOHGATP_BARE && 
-                                      pwt_iohgatp_mode[next_ready] != IOHGATP_SV48X4 ) ||
-                                     ((pwt_pdtv[next_ready] == 0) && 
-                                      (pwt_fsc_mode[next_ready] != SATP_BARE && 
-                                       pwt_fsc_mode[next_ready] != SATP_SV48)) ||
-                                     ((pwt_pdtv[next_ready] == 1) && 
-                                      (pwt_fsc_mode[next_ready] > PDTP_PD8)) ||
-                                     (pwt_msiptp_mode[next_ready] > MSIPTP_FLAT) ) begin
-                                    pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                    pwt_cause[next_ready] <= DDT_ENTRY_MISCONFIGURED;
-                                    pwt_iotval2[next_ready] <= 0;
-                                    pw_state <= WALK_SM_FAULT_REPORT;
+                                `store_ddt_entry_in_pwt();
+                                if ( `is_ddt_entry_malformed() ) begin
+                                    `report_fault(DDT_ENTRY_MISCONFIGURED);
                                 end else begin
                                     pw_state <= WALK_SM_CACHE_DDTE;
                                     ddtc_fill <= 1;
@@ -562,21 +511,54 @@ module rv_iommu_walker
                 end
                 WALK_SM_CACHE_DDTE: begin
                     if ( ddtc_lkup_fill_done_i == 1 && ddtc_fill == 1) begin
-                        $display("Reached cache ddt ");
                         ddtc_fill <= 0;
+                        // If process_id is valid and process directory
+                        // table cache missed then start PDT walk
+                        // Else directories are done; start translation
+                        if ( pdtc_hit_i == 0 && 
+                             pwt_pid_valid[next_ready] == 1) begin
+                            pw_state <= WALK_SM_PDT_WALK;
+                        end else begin
+                            pw_state <= WALK_SM_DDT_PDT_DONE;
+                        end
+                    end
+                end
+                WALK_SM_DDT_PDT_DONE: begin
+                    // If request is an TRANSLATED request or PAGE REQUEST
+                    // or a TRANSLATION request then ATS must be enabled
+                    // If it is a PAGE REQUEST then PRI must also be enabled
+                    if ( ((pwt_req[next_read].addr_type != ADDR_TYPE_UNTRANSLATED) &&
+                          (pwt_en_ats[next_ready] == 0)) ||
+                         ((pwt_req[next_read].addr_type != ADDR_TYPE_PAGE_REQUEST) &&
+                          (pwt_en_pri[next_ready] == 0)) ) begin 
+                        `report_fault(TRANS_TYPE_DISALLOWED);
+                    end else begin
+                        // Determine if it is MSI and needs to be translated. Is MSI if:
+                        //  1. Translated or Translation request
+                        //  2. Does not have a valid process_id
+                        //  3. MSI page tables are configured
+                        //  4. Address has offset of the seteipnum_le register (0)
+                        //  5. Is a write request and the lenght is 4B
+                        if ( (pwt_req[next_read].addr_type == ADDR_TYPE_UNTRANSLATED ||
+                              pwt_req[next_read].addr_type == ADDR_TYPE_TRANS_REQ) &&
+                             (pwt_pid_valid[next_ready] == 0) &&
+                             (pwt_msiptp_mode[next_ready] == MSIPTP_FLAT) &&
+                             (pwt_iova[next_ready][11:0] == 0) &&
+                             (pwt_len[next_ready] == 4) &&
+                             (pwt_read_write[next_ready] == WRITE) &&
+                             (pwt_iova[next_ready] == WRITE) ) begin
+                            pw_state <= WALK_SM_MSIPT_LOAD_DONE;
+                        end else begin
+                            if (pwt_pid_valid[next_ready] == 1) begin
+                                pw_state <= WALK_SM_MSIPT_LOAD_DONE;
+                            end
+                        end
                     end
                 end
             endcase
         end
     end
 
-                                //if ( (pwt_req[next_read].addr_type != ADDR_TYPE_UNTRANSLATED) &&
-                                //     (pwt_en_ats[next_ready] == 0) ) begin
-                                //    pwt_next_state[next_ready] <= WALK_SM_FAULT_REPORT;
-                                //    pwt_cause[next_ready] <= TRANS_TYPE_DISALLOWED;
-                                //    pwt_iotval2[next_ready] <= 0;
-                                //    pw_state <= WALK_SM_FAULT_REPORT;
-                                //end
     // Task to wait for load data completion and make 
     // waiting trackers ready
     always @(negedge rst_n or posedge clk) begin

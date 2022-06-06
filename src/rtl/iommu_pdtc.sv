@@ -31,140 +31,149 @@
 //
 //======================================================================
 module rv_iommu_pdtc
+       #(parameter MAX_PPN=34,
+         parameter MAX_PA=46,
+         parameter MAX_PDTC_ENTRIES=4)
         (
-        input wire      clk,
-        input wire      rst_n,
+        input wire                clk,
+        input wire                rst_n,
 
         // Lookup/fill port
-        input  wire        pdtc_lookup_i,
-        input  wire        pdtc_fill_i,
-        input  wire [23:0] device_id_i,
-        input  wire [19:0] process_id_i,
+        input  wire               pdtc_lookup_i,
+        input  wire               pdtc_fill_i,
+        input  wire [23:0]        device_id_i,
+        input  wire [19:0]        process_id_i,
 
-        // DDTC lookup result
-        output wire        pdtc_lkup_fill_done_o,
-        output wire        pdtc_hit_o,
-        output wire        ens_o,
-        output wire        sum_o,
-        output wire [19:0] pscid_o,
-        output wire [3:0]  fsc_mode_o,
-        output wire [33:0] fsc_ppn_o,
-        // DDTC fill data
-        input wire        ens_i,
-        input wire        sum_i,
-        input wire [19:0] pscid_i,
-        input wire [3:0]  fsc_mode_i,
-        input wire [33:0] fsc_ppn_i,
+        // PDTC lookup result
+        output wire               pdtc_lkup_fill_done_o,
+        output wire               pdtc_hit_o,
+        output wire               ens_o,
+        output wire               sum_o,
+        output wire [19:0]        pscid_o,
+        output wire [3:0]         fsc_mode_o,
+        output wire [MAX_PPN-1:0] fsc_ppn_o,
+        // PDTC fill data
+        input wire                ens_i,
+        input wire                sum_i,
+        input wire [19:0]         pscid_i,
+        input wire [3:0]          fsc_mode_i,
+        input wire [MAX_PPN-1:0]  fsc_ppn_i,
 
-        // flush port
-        input  wire [23:0] flush_device_id_i,
-        input  wire [19:0] flush_process_id_i,
-        input  wire        pdtc_flush_i,
-        output wire        pdtc_flush_done_o
+        // invalidate port
+        input  wire [23:0]        inval_device_id_i,
+        input  wire [19:0]        inval_process_id_i,
+        input  wire               pdtc_inval_i,
+        output wire               pdtc_inval_done_o
     );
-    reg pdtc_hit, pdtc_lkup_fill_done, pdtc_flush_done;
-    reg [1:0] i, hit_row;
+    reg                                pdtc_hit;
+    reg [$clog2(MAX_PDTC_ENTRIES)-1:0] hit_row;
 
-    reg [23:0] device_id_tag[4];
-    reg [19:0] process_id_tag[4];
-    reg        process_ctx_ens[4];
-    reg        process_ctx_sum[4];
-    reg [19:0] process_ctx_pscid[4];
-    reg [3:0]  process_ctx_fsc_mode[4];
-    reg [33:0] process_ctx_fsc_ppn[4];
-    reg [3:0]  valid;
-    reg [2:0]  lru;
-    reg [1:0]  victim;
+    reg [23:0]                         pdtc_device_id_tag[MAX_PDTC_ENTRIES];
+    reg [19:0]                         pdtc_process_id_tag[MAX_PDTC_ENTRIES];
+    reg                                pdtc_ens[MAX_PDTC_ENTRIES];
+    reg                                pdtc_sum[MAX_PDTC_ENTRIES];
+    reg [19:0]                         pdtc_pscid[MAX_PDTC_ENTRIES];
+    reg [3:0]                          pdtc_fsc_mode[MAX_PDTC_ENTRIES];
+    reg [MAX_PPN-1:0]                  pdtc_fsc_ppn[MAX_PDTC_ENTRIES];
+    reg [$clog2(MAX_PDTC_ENTRIES):0]   lru, lru_q;
+    reg [$clog2(MAX_PDTC_ENTRIES)-1:0] victim, victim_q;
+    reg [MAX_PDTC_ENTRIES-1:0]         pdtc_valid;
 
-    assign pdtc_flush_done_o = pdtc_flush_done;
 
-    assign pdtc_lkup_fill_done_o = pdtc_lkup_fill_done;
+    assign pdtc_inval_done_o = 
+               pdtc_inval_i & !pdtc_lookup_i & !pdtc_fill_i;
+    assign pdtc_lkup_fill_done_o = 
+               (!pdtc_inval_i & (pdtc_lookup_i | pdtc_fill_i));
     assign pdtc_hit_o = pdtc_hit;
-    assign ens_o = process_ctx_ens[hit_row];
-    assign sum_o = process_ctx_sum[hit_row];
-    assign pscid_o = process_ctx_pscid[hit_row];
-    assign fsc_mode_o = process_ctx_fsc_mode[hit_row];
-    assign fsc_ppn_o = process_ctx_fsc_ppn[hit_row];
 
-    // pick invalid as victim or the lru if all valid
-    function [1:0] make_victim();
-        reg [1:0] row;
-        casez (valid)
-            4'b???0 : row = 0;
-            4'b0000 : row = 0;
-            4'b??0? : row = 1;
-            4'b?0?? : row = 2;
-            4'b0??? : row = 3;
-            4'b1111 : 
-                casez (lru)
-                    3'b00?: row = 0;
-                    3'b10?: row = 1;
-                    3'b?10: row = 2;
-                    3'b?11: row = 3;
-                endcase
-        endcase
-        return row;
-    endfunction
-
-    // Make entry MRU and update the LRU
-    function void make_mru(reg [1:0] row);
-        case (row)
-            0: lru = {2'b11, lru[0]};
-            1: lru = {2'b01, lru[0]};
-            2: lru = {lru[2], 2'b01};
-            3: lru = {lru[2], 2'b00};
-        endcase
-    endfunction
+    assign ens_o = pdtc_ens[hit_row];
+    assign sum_o = pdtc_sum[hit_row];
+    assign pscid_o = pdtc_pscid[hit_row];
+    assign fsc_mode_o = pdtc_fsc_mode[hit_row];
+    assign fsc_ppn_o = pdtc_fsc_ppn[hit_row];
 
     always @(negedge rst_n or posedge clk) begin
         if ( rst_n == 0 ) begin
-            valid <= 4'b0000;
-            lru = 3'b000;
-            pdtc_lkup_fill_done <= 0;
-            pdtc_hit <= 0;
-            pdtc_flush_done <= 0;
+            pdtc_valid <= 0;
+            victim_q <= 0;
+            lru_q <= 0;
+        end else begin
+            victim_q <= victim;
+            lru_q <= lru;
         end
-        else begin
-            // Flush logic
-            if ( pdtc_flush_i && pdtc_flush_done == 0 ) begin
-                for ( i = 0; i <= 3; i++) begin
-                    if ( (process_id_tag[i] == flush_process_id_i) && 
-                         (device_id_tag[i] == flush_device_id_i) ) begin
-                        valid[i] <= 0;
-                    end
-                end
-                pdtc_flush_done <= 1;
+    end
+    // pick a invalid entry as victim; if all valid then pick
+    // LRU entry as victim
+    always_comb begin
+        victim = victim_q;
+        casez (pdtc_valid)
+            4'b???0: victim = 0;
+            4'b??01: victim = 1;
+            4'b?011: victim = 2;
+            4'b0111: victim = 3;
+            4'b1111:
+                casez (lru)
+                    3'b00?: victim = 0;
+                    3'b10?: victim = 1;
+                    3'b?10: victim = 2;
+                    3'b?11: victim = 3;
+                endcase
+        endcase
+    end
+    // DDT LRU update logic; make hit entry as MRU
+    always_comb begin
+        lru = lru_q;
+        case ({pdtc_hit, hit_row})
+            3'b100: lru = (lru & 3'b001) | 3'b110;
+            3'b101: lru = (lru & 3'b001) | 3'b010;
+            3'b110: lru = (lru & 3'b100) | 3'b001;
+            3'b111: lru = (lru & 3'b100) | 3'b000;
+        endcase
+    end
+    // DDT cache fill logic
+    always_comb begin
+        int f;
+        for ( f = 0; f < MAX_PDTC_ENTRIES; f++) begin
+            // replace a victim entry with the new tag and data
+            if ( (f == victim_q) && 
+                 !pdtc_inval_i && !pdtc_lookup_i && pdtc_fill_i ) begin
+                pdtc_device_id_tag[f] = device_id_i;
+                pdtc_process_id_tag[f] = process_id_i;
+                pdtc_ens[f] = ens_i;
+                pdtc_sum[f] = sum_i;
+                pdtc_pscid[f] = pscid_i;
+                pdtc_fsc_mode[f] = fsc_mode_i;
+                pdtc_fsc_ppn[f] = fsc_ppn_i;
+                pdtc_valid = pdtc_valid | (1 << f);
             end
-            if ( pdtc_flush_i == 0 && pdtc_flush_done == 1) begin
-                pdtc_flush_done <= 0;
+        end   
+    end
+    // DDT cache lookup logic
+    always_comb begin
+        int t;
+        pdtc_hit = 0;
+        hit_row = 0;
+        for ( t = 0; t < MAX_PDTC_ENTRIES; t++) begin
+            // Signal hit if a valid tag matches. If invalidation in progress 
+            // then hold off signaling hit
+            if ( (pdtc_device_id_tag[t] == device_id_i) && 
+                 (pdtc_process_id_tag[t] == process_id_i) && pdtc_valid[t] && 
+                 !pdtc_inval_i && pdtc_lookup_i && !pdtc_fill_i ) begin
+                pdtc_hit = 1;
+                hit_row = t;
             end
-            // Fill logic - invoked if no lookup or flush being done
-            if ( pdtc_fill_i && !pdtc_lookup_i && !pdtc_flush_i && pdtc_lkup_fill_done == 0) begin
-                victim <= make_victim();
-                device_id_tag[victim] <= device_id_i;
-                process_id_tag[victim] <= process_id_i;
-                process_ctx_ens[victim] <= ens_i;
-                process_ctx_sum[victim] <= sum_i;
-                process_ctx_pscid[victim] <= pscid_i;
-                process_ctx_fsc_mode[victim] <= fsc_mode_i;
-                process_ctx_fsc_ppn[victim] <= fsc_ppn_i;
-                pdtc_lkup_fill_done <= 1;
-            end
-            // Lookup logic - invoked if no fill or flush being done
-            if ( pdtc_lookup_i && !pdtc_fill_i && !pdtc_flush_i && pdtc_lkup_fill_done == 0) begin
-                for ( i = 0; i <= 3; i++) begin
-                    if ( (device_id_tag[i] == device_id_i) && valid[i] && 
-                         (process_id_tag[i] == process_id_i) ) begin
-                        hit_row <= i;
-                        pdtc_hit <= 1;
-                        make_mru(i);
-                    end
-                end
-                pdtc_lkup_fill_done <= 1;
-            end
-            if ( pdtc_lkup_fill_done == 1 && pdtc_lookup_i == 0 && pdtc_fill_i == 0) begin
-                pdtc_lkup_fill_done <= 0;
-                pdtc_hit <= 0;
+        end
+    end 
+    // DDT cache invalidation logic
+    always_comb begin
+        int i;
+        for ( i = 0; i < MAX_PDTC_ENTRIES; i++) begin
+            // match valid entries with matching device and process id invalid
+            // Do not invalidate entries when a fill or lookup is in progress
+            if ( (pdtc_process_id_tag[i] == inval_process_id_i) && 
+                 (pdtc_device_id_tag[i] == inval_device_id_i) && pdtc_valid[i] &&
+                  pdtc_inval_i && !pdtc_lookup_i && !pdtc_fill_i ) begin
+                pdtc_valid[i] = 0;
             end
         end
     end

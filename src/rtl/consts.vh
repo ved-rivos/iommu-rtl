@@ -60,23 +60,23 @@ localparam DDT_THREE_LEVEL = 4;
 // CAPABILITIES register params
 localparam IOMMU_VERSION = 1;
 localparam CAP_SV32      = (0 << 8);
-localparam CAP_SV39      = (0 << 9);
+localparam CAP_SV39      = (1 << 9);
 localparam CAP_SV48      = (1 << 10);
 localparam CAP_SV57      = (0 << 11);
 localparam CAP_SVNAPOT   = (0 << 14);
 localparam CAP_SVPBMT    = (0 << 15);
 localparam CAP_SV32x4    = (0 << 16);
-localparam CAP_SV39x4    = (0 << 17);
+localparam CAP_SV39x4    = (1 << 17);
 localparam CAP_SV48x4    = (1 << 18);
 localparam CAP_SV57x4    = (0 << 19);
-localparam MSI_FLAT      = (0 << 22);
-localparam MSI_MRIF      = (0 << 23);
-localparam AMO           = (0 << 24);
-localparam ATS           = (0 << 25);
-localparam T2GPA         = (0 << 26);
+localparam MSI_FLAT      = (1 << 22);
+localparam MSI_MRIF      = (1 << 23);
+localparam AMO           = (1 << 24);
+localparam ATS           = (1 << 25);
+localparam T2GPA         = (1 << 26);
 localparam END           = (0 << 27);
 localparam IGS           = (0 << 28);
-localparam PMON          = (0 << 30);
+localparam PMON          = (1 << 30);
 localparam PAS           = (46 << 32);
 localparam IOMMU_CAPS    = IOMMU_VERSION | CAP_SV32 |
                            CAP_SV39 | CAP_SV39 | CAP_SV48 | CAP_SV57 |
@@ -93,6 +93,9 @@ localparam PICK                     = 0;
 localparam WALK_SM_DDTC_PDTC_LOOKUP = 1;
 localparam WALK_SM_DDT_WALK         = 2;
 localparam WALK_SM_CACHE_DDTE       = 3;
+localparam WALK_SM_PDT_WALK         = 4;
+localparam WALK_SM_DDT_PDT_DONE     = 5;
+
 localparam WALK_SM_FAULT_REPORT     = 16;
 
 
@@ -133,6 +136,6 @@ localparam PDTP_PD8  = 3;
 localparam ADDR_TYPE_UNTRANSLATED = 0;
 localparam ADDR_TYPE_TRANSLATED   = 1;
 localparam ADDR_TYPE_TRANS_REQ    = 2;
-localparam ADDR_TYPE_RESERVED     = 3;
+localparam ADDR_TYPE_PAGE_REQUEST = 3;
 
 //`endif //_PARAMS_VH_

@@ -92,7 +92,7 @@ module rv_iommu_lspa
                             w_ld_data <= 512'h3001;
                         end
                         if ( w_ls_addr_i == 512'h3048 ) begin
-                            w_ld_data <= 512'h4001;
+                            w_ld_data <= 512'h400f;
                         end
                     end
                 end
