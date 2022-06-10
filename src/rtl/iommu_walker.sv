@@ -382,8 +382,7 @@ module rv_iommu_walker
         else begin
             case ( pw_state ) 
                 PICK: begin
-                    if ( is_any_tracker_ready && 
-                         (ddtc_lkup_fill_done_i == 0) ) begin
+                    if ( is_any_tracker_ready ) begin
                         while ( pwt_ready_bitmap[next_ready] == 0 ) begin
                             next_ready = next_ready + 1;
                             next_ready = next_ready & (MAX_PW - 1);
@@ -394,20 +393,19 @@ module rv_iommu_walker
                 WALK_SM_DDTC_PDTC_LOOKUP: begin
                     if ( ddtp_iommu_mode_i == IOMMU_OFF ) begin
                         `report_fault(ALL_IB_TRANS_DISALLOWED);
-                    end else if ( ddtp_iommu_mode_i == DDT_BARE ) begin
-                        if ( pwt_addr_type[next_ready] != ADDR_TYPE_UNTRANSLATED ) begin
+                    end else if ( ((ddtp_iommu_mode_i == DDT_BARE) &&
+                                   (pwt_addr_type[next_ready] != ADDR_TYPE_UNTRANSLATED)) ||
+                                  ((ddtp_iommu_mode_i == DDT_TWO_LEVEL) && 
+                                   (device_id_o[23:15] != 0)) || 
+                                  ((ddtp_iommu_mode_i == DDT_ONE_LEVEL) && 
+                                   (device_id_o[23:6] != 0)) ) begin
+                             // Only untranslated requests in Bare mode
+                             // Device ID should not be wider than supported by DDT
                             `report_fault(TRANS_TYPE_DISALLOWED);
-                        end
-                    end else if ( (ddtp_iommu_mode_i == DDT_TWO_LEVEL && 
-                                   device_id_o[23:15] != 0) || 
-                                  (ddtp_iommu_mode_i == DDT_ONE_LEVEL && 
-                                   device_id_o[23:6] != 0) ) begin
-                        // device ID too wide for mode
-                        `report_fault(TRANS_TYPE_DISALLOWED);
                     end else begin
                         // Wait for the DDTC and PDTC (if looked up) to completed lookup
                         if ( (ddtc_lkup_fill_done_i == 1) && 
-                             (pdtc_lkup_fill_done_i || ~pdtc_lookup_o) ) begin
+                             ((pdtc_lkup_fill_done_i == 1) || ~pdtc_lookup_o) ) begin
                             if ( pdtc_hit_i == 1 ) begin 
                                 // Store PDT information in tracker
                                 `store_pdtc_info_in_pwt();
@@ -419,12 +417,9 @@ module rv_iommu_walker
                                 // If process_id is valid and process directory
                                 // table cache missed then start PDT walk
                                 // Else directories are done; start translation
-                                if ( pdtc_hit_i == 0 && 
-                                     pwt_pid_valid[next_ready] == 1) begin
-                                    pw_state <= WALK_SM_PDT_WALK;
-                                end else begin
-                                    pw_state <= WALK_SM_DDT_PDT_DONE;
-                                end
+                                pw_state <= 
+                                    (!pdtc_hit_i && pwt_pid_valid[next_ready]) ?
+                                        WALK_SM_PDT_WALK : WALK_SM_DDT_PDT_DONE;
                             end else begin
                                 // DDTC miss, start walk depending on mode
                                 if (ddtp_iommu_mode_i == DDT_ONE_LEVEL) begin
@@ -510,27 +505,26 @@ module rv_iommu_walker
                     endcase
                 end
                 WALK_SM_CACHE_DDTE: begin
-                    if ( ddtc_lkup_fill_done_i == 1 && ddtc_fill == 1) begin
+                    if ( ddtc_lkup_fill_done_i == 1) begin
                         ddtc_fill <= 0;
                         // If process_id is valid and process directory
                         // table cache missed then start PDT walk
                         // Else directories are done; start translation
-                        if ( pdtc_hit_i == 0 && 
-                             pwt_pid_valid[next_ready] == 1) begin
-                            pw_state <= WALK_SM_PDT_WALK;
-                        end else begin
-                            pw_state <= WALK_SM_DDT_PDT_DONE;
-                        end
+                        pw_state <= (!pdtc_hit_i && pwt_pid_valid[next_ready]) ?
+                                    WALK_SM_PDT_WALK : WALK_SM_DDT_PDT_DONE;
                     end
                 end
                 WALK_SM_DDT_PDT_DONE: begin
-                    // If request is an TRANSLATED request or PAGE REQUEST
-                    // or a TRANSLATION request then ATS must be enabled
-                    // If it is a PAGE REQUEST then PRI must also be enabled
+                    // 1. If request is an TRANSLATED request or PAGE REQUEST
+                    //    or a TRANSLATION request then ATS must be enabled
+                    // 2. If it is a PAGE REQUEST then PRI must also be enabled
+                    // 3. If a process_id is valid then PDTV must be 1
                     if ( ((pwt_req[next_read].addr_type != ADDR_TYPE_UNTRANSLATED) &&
                           (pwt_en_ats[next_ready] == 0)) ||
                          ((pwt_req[next_read].addr_type != ADDR_TYPE_PAGE_REQUEST) &&
-                          (pwt_en_pri[next_ready] == 0)) ) begin 
+                          (pwt_en_pri[next_ready] == 0)) 
+                         ((pwt_req[next_read].pid_valid == 1) && 
+                          (pwt_pdtv[next_ready] == 0)) ) begin 
                         `report_fault(TRANS_TYPE_DISALLOWED);
                     end else begin
                         // Determine if it is MSI and needs to be translated. Is MSI if:
@@ -549,9 +543,14 @@ module rv_iommu_walker
                              (pwt_iova[next_ready] == WRITE) ) begin
                             pw_state <= WALK_SM_MSIPT_LOAD_DONE;
                         end else begin
-                            if (pwt_pid_valid[next_ready] == 1) begin
-                                pw_state <= WALK_SM_MSIPT_LOAD_DONE;
-                            end
+                            // TODO: For now assume S-stage only
+                                // DDTC miss, start walk depending on mode
+                                if (pwt_fsc_mode[next_ready] == SATP_SV48) begin
+                                    ls_addr <= ((ddtp_ppn_i * 4096) | (device_id_o[5:0] * 64));
+                                    ls_size <= 64;
+                                    pwt_sub_state[next_ready] <= DDT_LOAD_L0;
+                                end
+                            
                         end
                     end
                 end
