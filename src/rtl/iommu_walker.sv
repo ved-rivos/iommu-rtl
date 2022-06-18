@@ -298,8 +298,38 @@ module rv_iommu_walker
     reg               ld_data_trdy;
     assign            ld_data_trdy_o = ld_data_trdy;
 
+    // Store the data from DDT and PDT cache into page-walk tracker
     always_comb begin
-
+        for ( d = 0; d < MAX_PW; d++) begin
+            if ( (d == next_ready) && ddtc_lookup && 
+                 ddtc_lkup_fill_done_i && ddtc_hit_i ) begin
+                pwt_en_ats[d] <= en_ats_i;
+                pwt_en_pri[d] <= en_pri_i;
+                pwt_t2gpa[d] <= t2gpa_i;
+                pwt_dtf[d] <= dtf_i;
+                pwt_pdtv[d] <= pdtv_i;
+                pwt_prpr[d] <= prpr_i;
+                pwt_iohgatp_mode[d] <= iohgatp_mode_i;
+                pwt_gscid[d] <= gscid_i;
+                pwt_iohgatp_ppn[d] <= iohgatp_ppn_i;
+                pwt_fsc_mode[d] <= fsc_mode_i;
+                pwt_fsc_ppn[d] <= fsc_ppn_i;
+                pwt_dc_pscid[d] <= dc_pscid_i;
+                pwt_msiptp_mode[d] <= msiptp_mode_i;
+                pwt_msiptp_ppn[d] <= msiptp_ppn_i;
+                pwt_msi_addr_mask[d] <= msi_addr_mask_i;
+                pwt_msi_addr_pat[d] <= msi_addr_pat_i;
+            end 
+            if ( (d == next_ready) && pdtc_lookup && 
+                 pdtc_lkup_fill_done_i && pdtc_hit_i ) begin
+                pwt_pc_ens[next_ready] <= ens_i;
+                pwt_pc_sum[next_ready] <= sum_i;
+                pwt_pc_pscid[next_ready] <= pc_pscid_i;
+                pwt_pc_fsc_mode[next_ready] <= pc_fsc_mode_i;
+                pwt_pc_fsc_ppn[next_ready] <= pc_fsc_ppn_i;
+                pwt_pcvalid[next_ready] <= 1;
+            end
+        end
     end
 
     // Task to receive page walk requests, allocate a page walk
